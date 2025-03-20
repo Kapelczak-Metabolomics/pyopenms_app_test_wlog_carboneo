@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import numpy as np  
 import pandas as pd  
 import io  
+import base64  
 from datetime import datetime  
 from pyopenms import MSExperiment, MzMLFile  
   
@@ -36,7 +37,7 @@ def extract_chromatogram(exp):
     chrom = chromatograms[0]  
     peaks = chrom.get_peaks()  
     # If the returned peaks are a tuple (common with NumPy arrays),  
-    # assume peaks[0] is the time values and peaks[1] is the intensity values.  
+    # assume peaks[0] is time values and peaks[1] is intensity values.  
     if isinstance(peaks, tuple):  
         times, intensities = peaks  
     else:  
@@ -47,99 +48,102 @@ def extract_chromatogram(exp):
 def extract_mass_spectra(exp):  
     # Get all spectra from the experiment  
     spectra = exp.getSpectra()  
-    all_masses = []  
-    all_intensities = []  
-    all_rts = []  
+    masses = []  
+    intensities = []  
+    rts = []  
     for spectrum in spectra:  
-        rt = spectrum.getRT()  # Retention time  
-        mz_array, intensity_array = spectrum.get_peaks()  
+        rt = spectrum.getRT()  
+        try:  
+            mz_array, intensity_array = spectrum.get_peaks()  
+        except Exception:  
+            continue  
+        # Record all mass peaks and their corresponding intensity and retention time  
         for i in range(len(mz_array)):  
-            all_masses.append(mz_array[i])  
-            all_intensities.append(intensity_array[i])  
-            all_rts.append(rt)  
-    if len(all_masses) == 0:  
-        return pd.DataFrame()  
+            masses.append(mz_array[i])  
+            intensities.append(intensity_array[i])  
+            rts.append(rt)  
     df = pd.DataFrame({  
-        'Mass (m/z)': all_masses,  
-        'Intensity': all_intensities,  
-        'Retention Time (s)': all_rts  
+        "Mass (m/z)": masses,  
+        "Intensity": intensities,  
+        "Retention Time (s)": rts  
     })  
     return df  
   
-def extract_mass_peak(df, target_mass, tolerance):  
-    # Filter the dataframe for the target mass within the tolerance  
-    df_peak = df[(df['Mass (m/z)'] >= target_mass - tolerance) & (df['Mass (m/z)'] <= target_mass + tolerance)]  
+def extract_mass_peak(df, target_mass, tol):  
+    # Filter the dataframe to get only the peaks with Mass within the specified tolerance  
+    df_peak = df[(df["Mass (m/z)"] >= target_mass - tol) & (df["Mass (m/z)"] <= target_mass + tol)]  
     return df_peak  
   
-# -----------------------------------------------  
-# Helper function for PDF report creation using ReportLab  
-# -----------------------------------------------  
-def create_pdf_report(tic_fig, eic_fig, table_data, target_mass=None, tolerance=None):  
+def get_plot_image_bytes(fig):  
+    # Get plot image as PNG bytes using Plotly  
+    img_bytes = fig.to_image(format="png")  
+    return img_bytes  
+  
+def create_pdf_report(tic_fig, eic_fig, mass_table, filename):  
     buffer = io.BytesIO()  
     doc = SimpleDocTemplate(buffer, pagesize=letter)  
     elements = []  
-      
-    # Set up styles  
     styles = getSampleStyleSheet()  
-    title_style = styles["Title"]  
+    title_style = ParagraphStyle("title", parent=styles["Title"], fontSize=20, textColor=colors.HexColor("#171717"))  
     normal_style = styles["Normal"]  
-      
-    # Title Page  
-    title_text = "mzML Report"  
+  
+    # Add title and timestamp  
+    elements.append(Paragraph("mzML Report", title_style))  
+    elements.append(Spacer(1, 12))  
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
-    elements.append(Paragraph(title_text, title_style))  
-    elements.append(Spacer(1, 12))  
-    elements.append(Paragraph("Generated on: " + timestamp, normal_style))  
+    elements.append(Paragraph("Report generated at: " + timestamp, normal_style))  
     elements.append(Spacer(1, 24))  
-      
-    # Convert TIC Plotly figure to an image  
-    tic_bytes = tic_fig.to_image(format="png")  
-    tic_img = Image(io.BytesIO(tic_bytes), width=6*inch, height=4*inch)  
-    elements.append(Paragraph("Total Ion Chromatogram (TIC):", normal_style))  
-    elements.append(Spacer(1, 12))  
+  
+    # Add TIC image  
+    tic_img_bytes = get_plot_image_bytes(tic_fig)  
+    tic_img = Image(io.BytesIO(tic_img_bytes), width=6*inch, height=4*inch)  
+    elements.append(Paragraph("Total Ion Chromatogram", styles["Heading2"]))  
     elements.append(tic_img)  
-    elements.append(Spacer(1, 24))  
-      
-    # If available, convert EIC Plotly figure to an image and add it  
-    if eic_fig is not None:  
-        eic_bytes = eic_fig.to_image(format="png")  
-        eic_img = Image(io.BytesIO(eic_bytes), width=6*inch, height=4*inch)  
-        elements.append(Paragraph("Extracted Ion Chromatogram (EIC) for mass {:.4f} ± {:.4f}:".format(target_mass, tolerance), normal_style))  
-        elements.append(Spacer(1, 12))  
+    elements.append(Spacer(1, 12))  
+  
+    # Add EIC image if available  
+    if eic_fig:  
+        eic_img_bytes = get_plot_image_bytes(eic_fig)  
+        eic_img = Image(io.BytesIO(eic_img_bytes), width=6*inch, height=4*inch)  
+        elements.append(Paragraph("Extracted Ion Chromatogram", styles["Heading2"]))  
         elements.append(eic_img)  
-        elements.append(Spacer(1, 24))  
-      
-    # Add table data - showing top 10 rows  
-    if not table_data.empty:  
-        elements.append(Paragraph("Top 10 Mass Peaks by Intensity:", normal_style))  
         elements.append(Spacer(1, 12))  
-          
-        # Prepare data for the table (only first 10 rows)  
-        table_df = table_data.sort_values(by="Intensity", ascending=False).head(10)  
-        table_list = [table_df.columns.tolist()] + table_df.values.tolist()  
-        tbl = Table(table_list)  
-        tbl.setStyle(TableStyle([  
-            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey),  
-            ('GRID', (0,0), (-1,-1), 1, colors.black),  
-            ('FONTSIZE', (0,0), (-1,-1), 8),  
-            ('ALIGN',(0,0),(-1,-1),'CENTER')  
+  
+    # Add mass table data  
+    if not mass_table.empty:  
+        elements.append(Paragraph("Mass Spectra Data (Top 10 peaks by intensity)", styles["Heading2"]))  
+        tbl_data = [list(mass_table.columns)]  
+        for row in mass_table.head(10).itertuples(index=False):  
+            tbl_data.append(list(row))  
+        t = Table(tbl_data)  
+        t.setStyle(TableStyle([  
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2563EB")),  
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),  
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),  
+            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.black),  
+            ('BOX', (0,0), (-1,-1), 0.25, colors.black)  
         ]))  
-        elements.append(tbl)  
-        elements.append(Spacer(1, 24))  
-      
+        elements.append(t)  
+        elements.append(Spacer(1, 12))  
+  
     doc.build(elements)  
-    pdf_bytes = buffer.getvalue()  
-    buffer.close()  
-    return pdf_bytes  
+    buffer.seek(0)  
+    return buffer  
+  
+def get_download_link(pdf_buffer, filename):  
+    # Encode PDF to base64  
+    b64 = base64.b64encode(pdf_buffer.read()).decode()  
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">Download PDF Report</a>'  
+    return href  
   
 # -----------------------------------------------  
-# Streamlit App Layout  
+# Streamlit App UI  
 # -----------------------------------------------  
+  
 st.set_page_config(page_title="mzML Chromatogram Viewer", layout="wide")  
 st.title("mzML Chromatogram Viewer")  
-st.markdown("Upload an mzML file to view its corresponding chromatogram and mass data.")  
+st.markdown("Upload an mzML file to view and analyze its content, then generate a PDF report.")  
   
-# File uploader widget  
 uploaded_file = st.file_uploader("Choose an mzML file", type=["mzML"])  
   
 if uploaded_file is not None:  
@@ -148,15 +152,14 @@ if uploaded_file is not None:
         experiment = load_mzml_file(file_bytes)  
     st.success("File loaded successfully!")  
       
-    # Extract the total ion chromatogram (TIC)  
+    # Display the Total Ion Chromatogram (TIC)  
     times, intensities = extract_chromatogram(experiment)  
     if times is None or intensities is None:  
         st.error("No chromatogram data found in this mzML file.")  
     else:  
-        st.subheader("Total Ion Chromatogram (TIC)")  
-        # Toggle to show individual data points on TIC  
-        show_points_tic = st.checkbox("Show individual data points on TIC", value=True)  
+        show_points_tic = st.checkbox("Show individual data points on TIC", value=True, key="tic_toggle")  
         mode_tic = "lines+markers" if show_points_tic else "lines"  
+      
         tic_fig = go.Figure()  
         tic_fig.add_trace(go.Scatter(  
             x=times,  
@@ -178,7 +181,7 @@ if uploaded_file is not None:
         )  
         st.plotly_chart(tic_fig, use_container_width=True)  
       
-    # Extract and display mass spectra data table  
+    # Extract mass spectra data and display as a table  
     mass_df = extract_mass_spectra(experiment)  
     if mass_df.empty:  
         st.error("No mass spectra data found in this mzML file.")  
@@ -186,23 +189,42 @@ if uploaded_file is not None:
         st.subheader("Mass Spectra Data")  
         st.dataframe(mass_df.head(20))  
       
-        # User inputs for extracting an ion chromatogram  
+        # User inputs for extracting an ion chromatogram (EIC)  
         st.markdown("### Extract Ion Chromatogram (EIC)")  
         col1, col2 = st.columns(2)  
         with col1:  
-            target_mass = st.number_input("Target Mass (m/z)", min_value=float(mass_df["Mass (m/z)"].min()),  
-                                          max_value=float(mass_df["Mass (m/z)"].max()), value=float(mass_df["Mass (m/z)"].mean()))  
+            target_mass = st.number_input("Target Mass (m/z)",   
+                                          min_value=float(mass_df["Mass (m/z)"].min()),  
+                                          max_value=float(mass_df["Mass (m/z)"].max()),  
+                                          value=float(mass_df["Mass (m/z)"].mean()))  
         with col2:  
-            tolerance = st.number_input("Tolerance (± m/z)", min_value=0.0001, value=0.01, step=0.0001)  
+            tolerance = st.number_input("Tolerance (± m/z)", min_value=0.0001,   
+                                        value=0.01, step=0.0001)  
       
         df_peak = extract_mass_peak(mass_df, target_mass, tolerance)  
         if df_peak.empty:  
             st.warning("No mass peaks found for the specified mass and tolerance.")  
             eic_fig = None  
         else:  
-            st.success("Mass peaks found: {}".format(len(df_peak)))  
-            # Group the data by Retention Time to generate an EIC  
+            st.success("Mass peaks found: " + str(len(df_peak)))  
+            # Group data by Retention Time to create an EIC  
             eic_data = df_peak.groupby("Retention Time (s)")["Intensity"].sum().reset_index()  
-            # Toggle to show individual data points on EIC  
             show_points_eic = st.checkbox("Show individual data points on EIC", value=True, key="eic_toggle")  
-            mode_eic = "lines+
+            mode_eic = "lines+markers" if show_points_eic else "lines"  
+      
+            eic_fig = go.Figure()  
+            eic_fig.add_trace(go.Scatter(  
+                x=eic_data["Retention Time (s)"],  
+                y=eic_data["Intensity"],  
+                mode=mode_eic,  
+                line=dict(color="#24EB84"),  
+                marker=dict(color="#B2EB24", size=6)  
+            ))  
+            eic_fig.update_layout(  
+                title=dict(text="Extracted Ion Chromatogram", x=0.5, xanchor="center", font=dict(size=20, color="#171717")),  
+                xaxis_title="Retention Time (s)",  
+                yaxis_title="Summed Intensity",  
+                xaxis=dict(showgrid=True, gridcolor="#F3F4F6", zeroline=False, ticks="outside", linecolor="#171717"),  
+                yaxis=dict(showgrid=True, gridcolor="#F3F4F6", zeroline=False, ticks="outside", linecolor="#171717"),  
+                plot_bgcolor="#FFFFFF",  
+                paper
