@@ -1,0 +1,11 @@
+version: '3.8'  # Specify the version of the Docker Compose file format
+
+services:  # Define the services that will be run
+  streamlit-app:  # Name of the service
+    build: .  # Build the Docker image from the Dockerfile in the current directory
+    ports:  # Map ports between the host and the container
+      - "8501:8501"  # Map port 8501 on the host to port 8501 on the container (default for Streamlit)
+    volumes:  # Define volume mappings
+      - .:/app  # Mount the current directory to /app in the container for file access
+    environment:  # Set environment variables for the container
+      - PYTHONUNBUFFERED=1  # Ensure that Python output is sent straight to the terminal without buffering
