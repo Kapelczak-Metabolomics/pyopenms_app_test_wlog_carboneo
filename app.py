@@ -1,4 +1,21 @@
-# Import necessary libraries  
+# Streamlit app that installs missing dependencies on the fly and loads an mzML file to view its chromatogram  
+  
+import sys  
+import subprocess  
+  
+# Function to install a package if not present  
+def install_if_missing(package):  
+    try:  
+        __import__(package)  
+    except ImportError:  
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])  
+  
+# Install necessary packages  
+install_if_missing("plotly")  
+install_if_missing("pyopenms")  
+install_if_missing("streamlit")  
+  
+# Now import the installed libraries  
 import streamlit as st  
 import plotly.graph_objects as go  
 from pyopenms import MSExperiment, MzMLFile  
@@ -7,30 +24,27 @@ from pyopenms import MSExperiment, MzMLFile
 def load_mzml_file(file_bytes):  
     # Create an MSExperiment instance  
     exp = MSExperiment()  
-    # Use MzMLFile to load the file from a bytes object  
-    mzml_file = MzMLFile()  
-    # The load function requires a filename so we write the bytes to disk temporarily  
+    # Use MzMLFile to load the file from a bytes object.  
+    # Write the bytes to a temporary file since pyopenms requires a filename.  
     with open("temp.mzML", "wb") as f:  
         f.write(file_bytes)  
+    mzml_file = MzMLFile()  
     mzml_file.load("temp.mzML", exp)  
     return exp  
   
 # Function to extract chromatogram data from the experiment  
 def extract_chromatogram(exp):  
-    # Assuming the experiment has at least one chromatogram,  
-    # and we focus on the first one.  
-    if len(exp.getChromatograms()) == 0:  
+    # Check if any chromatograms are present and then extract the first one.  
+    chromatograms = exp.getChromatograms()  
+    if len(chromatograms) == 0:  
         return None, None  
-    chrom = exp.getChromatograms()[0]  
-    # Chromatogram data has a list of peaks, each with a time and intensity value.  
-    # For simplicity we extract them as lists.  
+    chrom = chromatograms[0]  
     times = [p.getRT() for p in chrom.get_peaks()]  
     intensities = [p.getIntensity() for p in chrom.get_peaks()]  
     return times, intensities  
   
-# Streamlit App Layout  
+# Configure the Streamlit page  
 st.set_page_config(page_title="mzML Chromatogram Viewer", layout="wide")  
-  
 st.title("mzML Chromatogram Viewer")  
 st.markdown("Upload an mzML file to view its corresponding chromatogram.")  
   
@@ -38,7 +52,6 @@ st.markdown("Upload an mzML file to view its corresponding chromatogram.")
 uploaded_file = st.file_uploader("Choose an mzML file", type=["mzML"])  
   
 if uploaded_file is not None:  
-    # Read file bytes  
     file_bytes = uploaded_file.read()  
       
     with st.spinner("Loading mzML file..."):  
@@ -46,13 +59,13 @@ if uploaded_file is not None:
       
     st.success("File loaded successfully!")  
       
-    # Extract chromatogram  
+    # Extract and validate chromatogram data  
     times, intensities = extract_chromatogram(experiment)  
       
     if times is None or intensities is None:  
         st.error("No chromatogram data found in this mzML file.")  
     else:  
-        # Create Plotly figure  
+        # Create interactive Plotly figure  
         fig = go.Figure()  
         fig.add_trace(go.Scatter(  
             x=times,  
@@ -72,7 +85,6 @@ if uploaded_file is not None:
             font=dict(family="Inter", size=14, color="#171717"),  
             margin=dict(l=60, r=40, t=60, b=60)  
         )  
-          
         st.plotly_chart(fig, use_container_width=True)  
 else:  
     st.info("Please upload an mzML file to begin.")  
