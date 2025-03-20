@@ -4,3 +4,4 @@ pyopenms
 reportlab  
 pandas  
 numpy
+kaleido
