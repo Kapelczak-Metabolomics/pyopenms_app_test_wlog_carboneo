@@ -78,7 +78,6 @@ def extract_mass_spectra(exp):
     for spectrum in spectra:  
         rt = spectrum.getRT()  
         mz_array, intensity_array = spectrum.get_peaks()  
-          
         for i in range(len(mz_array)):  
             masses.append(mz_array[i])  
             intensities.append(intensity_array[i])  
@@ -99,108 +98,121 @@ def extract_mass_peak(df, target_mass, tolerance):
     return df[(df["Mass (m/z)"] >= target_mass - tolerance) &   
               (df["Mass (m/z)"] <= target_mass + tolerance)]  
   
-# -----------------------------------------------  
-# PDF Generation Functions  
-# -----------------------------------------------  
-  
 def get_download_link(buffer, filename):  
-    """Generate a download link for a PDF file."""  
-    b64 = base64.b64encode(buffer.read()).decode()  
+    b64 = base64.b64encode(buffer.getvalue()).decode()  
     href = f'<a href="data:application/pdf;base64,{b64}" class="download-button" download="{filename}">Download PDF Report</a>'  
     return href  
   
-def create_pdf_report(filename, tic_fig, eic_fig=None, mass_df=None, target_mass=None, tolerance=None):  
-    """Create a PDF report with chromatogram images and data tables."""  
+def create_pdf_report(filename, tic_fig=None, eic_fig=None, mass_df=None, target_mass=None, tolerance=None):  
     pdf_buffer = io.BytesIO()  
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)  
       
     # Create styles  
     styles = getSampleStyleSheet()  
-    styles.add(ParagraphStyle(name='Title',   
-                             fontName='Helvetica-Bold',   
-                             fontSize=18,   
-                             leading=22,   
-                             textColor=colors.HexColor("#2563EB")))  
-    styles.add(ParagraphStyle(name='Heading2',   
-                             fontName='Helvetica-Bold',   
-                             fontSize=14,   
-                             leading=18,   
-                             textColor=colors.HexColor("#2563EB"),  
-                             spaceAfter=10))  
-    styles.add(ParagraphStyle(name='Right',   
-                             fontName='Helvetica',   
-                             fontSize=10,   
-                             alignment=TA_RIGHT))  
-    styles.add(ParagraphStyle(name='Center',   
-                             fontName='Helvetica',   
-                             fontSize=12,   
-                             alignment=TA_CENTER))  
+    # Use a different name for the custom title style to avoid conflict  
+    custom_title_style = ParagraphStyle(  
+        name='CustomTitle',  
+        fontName='Helvetica-Bold',  
+        fontSize=18,  
+        leading=22,  
+        alignment=TA_CENTER,  
+        spaceAfter=12,  
+        textColor=colors.HexColor("#2563EB")  
+    )  
       
-    normal_style = ParagraphStyle(name='Normal',   
-                                 fontName='Helvetica',   
-                                 fontSize=12,   
-                                 leading=14)  
+    heading2_style = ParagraphStyle(  
+        name='CustomHeading2',  
+        fontName='Helvetica-Bold',  
+        fontSize=14,  
+        leading=18,  
+        spaceAfter=6,  
+        textColor=colors.HexColor("#2563EB")  
+    )  
+      
+    normal_style = ParagraphStyle(  
+        name='CustomNormal',  
+        fontName='Helvetica',  
+        fontSize=10,  
+        leading=14,  
+        spaceAfter=6  
+    )  
+      
+    right_style = ParagraphStyle(  
+        name='CustomRight',  
+        fontName='Helvetica',  
+        fontSize=8,  
+        leading=10,  
+        alignment=TA_RIGHT,  
+        textColor=colors.gray  
+    )  
       
     # Elements to add to the PDF  
     elements = []  
       
-    # Create a header table with logo  
-    logo_path = "temp_logo.png" if os.path.exists("temp_logo.png") else None  
-      
-    if logo_path:  
-        # Create a header with logo  
-        logo_img = RLImage(logo_path, width=1.5*inch, height=0.75*inch)  
+    # Add logo if available  
+    if os.path.exists("temp_logo.png"):  
+        # Create a table for header with logo  
+        logo = RLImage("temp_logo.png", width=1.5*inch, height=0.75*inch)  
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
           
-        header_data = [[Paragraph(f"<b>{filename}</b>", styles['Title']), logo_img],  
-                      [Paragraph(f"Generated: {timestamp}", normal_style), ""]]  
+        header_data = [[  
+            Paragraph(f"<b>mzML Analysis Report</b><br/><font size=8>{filename}</font>", styles['Normal']),  
+            logo  
+        ]]  
           
         header_table = Table(header_data, colWidths=[4*inch, 2*inch])  
         header_table.setStyle(TableStyle([  
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),  
-            ('ALIGN', (1,0), (1,0), 'RIGHT'),  
-            ('BOTTOMPADDING', (0,0), (-1,-1), 10),  
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),  
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),  
+            ('VALIGN', (0, 0), (1, 0), 'TOP'),  
         ]))  
+          
         elements.append(header_table)  
     else:  
-        # Header without logo  
-        elements.append(Paragraph(f"<b>{filename}</b>", styles['Title']))  
-        elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))  
+        # Just add title if no logo  
+        elements.append(Paragraph(f"mzML Analysis Report: {filename}", custom_title_style))  
       
     elements.append(Spacer(1, 20))  
+    elements.append(Paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))  
+    elements.append(Spacer(1, 20))  
       
-    # Add TIC image  
-    if tic_fig and kaleido_available:  
+    # Add TIC plot if available  
+    if tic_fig is not None and kaleido_available:  
+        # Export the figure to a PNG image  
         tic_img_path = "tic_plot.png"  
-        tic_fig.write_image(tic_img_path, width=700, height=400, scale=2)  
-        elements.append(Paragraph("<b>Total Ion Chromatogram</b>", styles['Heading2']))  
-        elements.append(RLImage(tic_img_path, width=6.5*inch, height=3.5*inch))  
+        tic_fig.write_image(tic_img_path, width=600, height=400, scale=2)  
+          
+        elements.append(Paragraph("Total Ion Chromatogram (TIC)", heading2_style))  
         elements.append(Spacer(1, 10))  
+        elements.append(RLImage(tic_img_path, width=6*inch, height=4*inch))  
+        elements.append(Spacer(1, 20))  
       
-    # Add EIC image if available  
-    if eic_fig and kaleido_available:  
+    # Add EIC plot if available  
+    if eic_fig is not None and kaleido_available:  
+        # Export the figure to a PNG image  
         eic_img_path = "eic_plot.png"  
-        eic_fig.write_image(eic_img_path, width=700, height=400, scale=2)  
-        elements.append(Paragraph(f"<b>Extracted Ion Chromatogram (m/z {target_mass:.4f} ± {tolerance:.4f})</b>", styles['Heading2']))  
-        elements.append(RLImage(eic_img_path, width=6.5*inch, height=3.5*inch))  
+        eic_fig.write_image(eic_img_path, width=600, height=400, scale=2)  
+          
+        elements.append(Paragraph(f"Extracted Ion Chromatogram (EIC) for m/z {target_mass} ± {tolerance}", heading2_style))  
         elements.append(Spacer(1, 10))  
+        elements.append(RLImage(eic_img_path, width=6*inch, height=4*inch))  
+        elements.append(Spacer(1, 20))  
       
-    # Add mass spectra data table if available  
+    # Add mass spectra data if available  
     if mass_df is not None and not mass_df.empty:  
         # Get top 10 peaks by intensity  
         top_peaks = mass_df.sort_values("Intensity", ascending=False).head(10)  
           
-        # Create table data  
-        table_data = [["Mass (m/z)", "Intensity", "Retention Time (s)"]]  
+        # Create a table for the top peaks  
+        data = [["Mass (m/z)", "Intensity", "Retention Time (s)"]]  
         for _, row in top_peaks.iterrows():  
-            table_data.append([  
+            data.append([  
                 f"{row['Mass (m/z)']:.4f}",  
-                f"{row['Intensity']:.2f}",  
+                f"{row['Intensity']:.0f}",  
                 f"{row['Retention Time (s)']:.2f}"  
             ])  
           
-        # Create table  
-        mass_table = Table(table_data, colWidths=[2*inch, 2*inch, 2*inch])  
+        mass_table = Table(data, colWidths=[2*inch, 2*inch, 2*inch])  
         mass_table.setStyle(TableStyle([  
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2563EB")),  
             ('TEXTCOLOR', (0,0), (-1,0), colors.white),  
@@ -211,17 +223,17 @@ def create_pdf_report(filename, tic_fig, eic_fig=None, mass_df=None, target_mass
             ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),  
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey)  
         ]))  
-        elements.append(Paragraph("<b>Top 10 Mass Spectra Peaks</b>", styles['Heading2']))  
+        elements.append(Paragraph("<b>Top 10 Mass Spectra Peaks</b>", heading2_style))  
         elements.append(mass_table)  
         elements.append(Spacer(1, 20))  
       
     # Include details about EIC extraction if applicable  
-    if target_mass and tolerance:  
-        elements.append(Paragraph(f"Extracted Ion Chromatogram was generated for target mass <b>{target_mass:.4f}</b> ± <b>{tolerance:.4f}</b> m/z.", normal_style))  
+    if target_mass is not None and tolerance is not None:  
+        elements.append(Paragraph(f"Extracted Ion Chromatogram was generated for target mass <b>{target_mass}</b> ± <b>{tolerance}</b> m/z.", normal_style))  
       
     # Footer  
     elements.append(Spacer(1, 30))  
-    elements.append(Paragraph("© 2025 Your Company Name", styles['Right']))  
+    elements.append(Paragraph("© 2025 Your Company Name", right_style))  
       
     # Build PDF  
     doc.build(elements)  
@@ -282,19 +294,19 @@ if uploaded_file is not None:
             col1, col2 = st.columns(2)  
             with col1:  
                 target_mass = st.number_input("Target Mass (m/z)",   
-                                             min_value=float(mass_df["Mass (m/z)"].min()),  
-                                             max_value=float(mass_df["Mass (m/z)"].max()),  
-                                             value=float(mass_df["Mass (m/z)"].mean()))  
+                                              min_value=float(mass_df["Mass (m/z)"].min()),  
+                                              max_value=float(mass_df["Mass (m/z)"].max()),  
+                                              value=float(mass_df["Mass (m/z)"].mean()))  
             with col2:  
                 tolerance = st.number_input("Tolerance (± m/z)", min_value=0.0001,   
-                                           value=0.01, step=0.0001)  
+                                            value=0.01, step=0.0001)  
           
             df_peak = extract_mass_peak(mass_df, target_mass, tolerance)  
             if df_peak.empty:  
                 st.warning("No mass peaks found for the specified mass and tolerance.")  
                 eic_fig = None  
             else:  
-                st.success(f"Mass peaks found: {len(df_peak)}")  
+                st.success("Mass peaks found: " + str(len(df_peak)))  
                 # Group data by Retention Time to create an EIC  
                 eic_data = df_peak.groupby("Retention Time (s)")["Intensity"].sum().reset_index()  
                 show_points_eic = st.checkbox("Show individual data points on EIC", value=True, key="eic_toggle")  
