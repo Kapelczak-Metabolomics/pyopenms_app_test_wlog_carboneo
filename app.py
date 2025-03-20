@@ -21,9 +21,15 @@ def extract_chromatogram(exp):
     if len(chromatograms) == 0:  
         return None, None  
     chrom = chromatograms[0]  
-    # Extract retention times and intensity values from each peak  
-    times = [p.getRT() for p in chrom.get_peaks()]  
-    intensities = [p.getIntensity() for p in chrom.get_peaks()]  
+    peaks = chrom.get_peaks()  
+    # If the returned peaks are a tuple (common when using NumPy arrays),  
+    # assume peaks[0] is the time values and peaks[1] is the intensity values.  
+    if isinstance(peaks, tuple):  
+        times, intensities = peaks  
+    else:  
+        # Otherwise, assume a list where each element has methods getRT() and getIntensity()  
+        times = [p.getRT() for p in peaks]  
+        intensities = [p.getIntensity() for p in peaks]  
     return times, intensities  
   
 # Setup Streamlit app page  
