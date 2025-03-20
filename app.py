@@ -8,6 +8,7 @@ import base64
 from datetime import datetime  
 from pyopenms import MSExperiment, MzMLFile  
 import os  
+from PIL import Image  
   
 # Import reportlab components for PDF generation  
 from reportlab.lib.pagesizes import letter  
@@ -63,7 +64,6 @@ def extract_chromatogram(exp):
         return None, None  
     chrom = chromatograms[0]  
     peaks = chrom.get_peaks()  
-    # If peaks is a tuple (e.g., numpy arrays), assume first element is time and second intensities  
     if isinstance(peaks, tuple):  
         times, intensities = peaks  
     else:  
@@ -72,95 +72,194 @@ def extract_chromatogram(exp):
     return times, intensities  
   
 def extract_mass_spectra(exp):  
-    # Extract mass spectra data into a DataFrame of top 10 peaks  
     spectra = exp.getSpectra()  
-    peaks_data = []  
-    for spectrum in spectra:  
-        mz_array = spectrum.get_peaks()[0] if isinstance(spectrum.get_peaks(), tuple) else [p.getMZ() for p in spectrum.get_peaks()]  
-        intensity_array = spectrum.get_peaks()[1] if isinstance(spectrum.get_peaks(), tuple) else [p.getIntensity() for p in spectrum.get_peaks()]  
-        for m, inten in zip(mz_array, intensity_array):  
-            peaks_data.append({"m/z": m, "Intensity": inten})  
-    if peaks_data:  
-        df = pd.DataFrame(peaks_data)  
-        df = df.sort_values("Intensity", ascending=False).drop_duplicates("m/z")  
-        return df.head(10)  
-    else:  
-        return pd.DataFrame()  
-  
-def get_download_link(pdf_buffer, filename):  
-    b64 = base64.b64encode(pdf_buffer.read()).decode()  
-    href = f'<a class="download-button" href="data:application/octet-stream;base64,{b64}" download="{filename}">Download PDF Report</a>'  
-    return href  
-  
-def create_pdf_report(filename, tic_fig, eic_fig, mass_df, pdf_title, target_mass=0, tolerance=0):  
-    pdf_buffer = io.BytesIO()  
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter,  
-                            rightMargin=72, leftMargin=72,  
-                            topMargin=72, bottomMargin=72)  
-    styles = getSampleStyleSheet()  
-    # Create custom styles with unique names to avoid conflicts  
-    custom_title_style = ParagraphStyle(name='CustomTitle', parent=styles['Heading1'],  
-                                        fontName='Helvetica-Bold', fontSize=22, leading=26, alignment=TA_CENTER)  
-    normal_style = styles['Normal']  
-    right_style = ParagraphStyle(name='Right', parent=styles['Normal'], alignment=TA_RIGHT)  
+    masses = []  
+    intensities = []  
+    rts = []  
       
+    for spectrum in spectra:  
+        rt = spectrum.getRT()  
+        peaks = spectrum.get_peaks()  
+          
+        if isinstance(peaks, tuple):  
+            mz_values, intensity_values = peaks  
+        else:  
+            mz_values = [p.getMZ() for p in peaks]  
+            intensity_values = [p.getIntensity() for p in peaks]  
+          
+        for mz, intensity in zip(mz_values, intensity_values):  
+            masses.append(mz)  
+            intensities.append(intensity)  
+            rts.append(rt)  
+      
+    if not masses:  
+        return pd.DataFrame()  
+      
+    df = pd.DataFrame({  
+        'Retention Time (s)': rts,  
+        'm/z': masses,  
+        'Intensity': intensities  
+    })  
+      
+    # Sort by intensity (descending)  
+    df = df.sort_values('Intensity', ascending=False)  
+    return df  
+  
+def extract_eic(exp, target_mass, tolerance):  
+    spectra = exp.getSpectra()  
+    times = []  
+    intensities = []  
+      
+    for spectrum in spectra:  
+        rt = spectrum.getRT()  
+        peaks = spectrum.get_peaks()  
+          
+        if isinstance(peaks, tuple):  
+            mz_values, intensity_values = peaks  
+        else:  
+            mz_values = [p.getMZ() for p in peaks]  
+            intensity_values = [p.getIntensity() for p in peaks]  
+          
+        # Find peaks within the mass tolerance  
+        matching_intensities = [  
+            intensity for mz, intensity in zip(mz_values, intensity_values)  
+            if abs(mz - target_mass) <= tolerance  
+        ]  
+          
+        if matching_intensities:  
+            times.append(rt)  
+            intensities.append(sum(matching_intensities))  
+        else:  
+            times.append(rt)  
+            intensities.append(0)  
+      
+    return times, intensities  
+  
+def get_download_link(buffer, filename):  
+    b64 = base64.b64encode(buffer.getvalue()).decode()  
+    return f'<a href="data:application/pdf;base64,{b64}" download="{filename}_report.pdf" class="download-button">Download PDF Report</a>'  
+  
+def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_mass, tolerance, pdf_title):  
+    pdf_buffer = io.BytesIO()  
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)  
+      
+    # Create styles  
+    styles = getSampleStyleSheet()  
+    custom_title_style = ParagraphStyle(  
+        name='CustomTitle',  
+        fontName='Helvetica-Bold',  
+        fontSize=18,  
+        leading=22,  
+        alignment=TA_CENTER,  
+        spaceAfter=12,  
+        textColor=colors.HexColor("#2563EB")  
+    )  
+      
+    heading_style = ParagraphStyle(  
+        name='CustomHeading',  
+        fontName='Helvetica-Bold',  
+        fontSize=14,  
+        leading=18,  
+        spaceAfter=6,  
+        textColor=colors.HexColor("#2563EB")  
+    )  
+      
+    normal_style = ParagraphStyle(  
+        name='CustomNormal',  
+        fontName='Helvetica',  
+        fontSize=12,  
+        leading=14,  
+        spaceAfter=6  
+    )  
+      
+    right_style = ParagraphStyle(  
+        name='CustomRight',  
+        fontName='Helvetica',  
+        fontSize=10,  
+        leading=12,  
+        alignment=TA_RIGHT  
+    )  
+      
+    # Elements to add to the PDF  
     elements = []  
       
-    # Add header: Logo on top-right, Title centered.  
-    header_table_data = []  
-    logo_image = None  
+    # Add logo if available  
     if os.path.exists("temp_logo.png"):  
-        # Use the original logo dimensions, but cap the width if it is too wide.  
-        logo_image = RLImage("temp_logo.png")  
-        logo_image.drawWidth = min(2*inch, logo_image.drawWidth)  
-        logo_image.drawHeight = logo_image.drawHeight * (logo_image.drawWidth / logo_image.imageWidth)  
-    header_data = []  
-    # Left cell empty, middle cell PDF Title, right cell logo  
-    header_data.append(["", f"<b>{pdf_title}</b>", ""])  
-    header_table = Table(header_data, colWidths=[2*inch, 3*inch, 2*inch])  
-    header_table.setStyle(TableStyle([  
-        ('ALIGN', (1,0), (1,0), 'CENTER'),  
-        ('VALIGN', (1,0), (1,0), 'MIDDLE')  
-    ]))  
-    elements.append(header_table)  
+        try:  
+            # Get the original image dimensions  
+            img = Image.open("temp_logo.png")  
+            img_width, img_height = img.size  
+              
+            # Calculate the aspect ratio  
+            aspect_ratio = img_height / img_width  
+              
+            # Set a maximum width for the logo (2 inches)  
+            max_width = 2 * inch  
+              
+            # Calculate the height based on the aspect ratio  
+            logo_width = min(max_width, img_width)  
+            logo_height = logo_width * aspect_ratio  
+              
+            # Create a table for the header with logo and title  
+            logo_img = RLImage("temp_logo.png", width=logo_width, height=logo_height)  
+              
+            # Create a table for the header  
+            header_data = [[logo_img, Paragraph(pdf_title, custom_title_style)]]  
+            header_table = Table(header_data, colWidths=[logo_width, 5*inch])  
+            header_table.setStyle(TableStyle([  
+                ('ALIGN', (0, 0), (0, 0), 'LEFT'),  
+                ('ALIGN', (1, 0), (1, 0), 'RIGHT'),  
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  
+            ]))  
+            elements.append(header_table)  
+        except Exception as e:  
+            # If there's an error with the logo, just add the title  
+            elements.append(Paragraph(pdf_title, custom_title_style))  
+            elements.append(Paragraph(f"Logo error: {str(e)}", normal_style))  
+    else:  
+        # No logo, just add the title  
+        elements.append(Paragraph(pdf_title, custom_title_style))  
+      
     elements.append(Spacer(1, 20))  
       
-    if logo_image:  
-        # Place the logo at the top right by creating a table with the logo only in the right cell  
-        logo_table = Table([["", logo_image]], colWidths=[4*inch, 2*inch])  
-        logo_table.setStyle(TableStyle([  
-            ('ALIGN', (1,0), (1,0), 'RIGHT'),  
-            ('VALIGN', (1,0), (1,0), 'TOP')  
-        ]))  
-        elements.insert(0, logo_table)  
-      
-    # Add generation timestamp  
-    elements.append(Paragraph(f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", right_style))  
+    # Add file information  
+    elements.append(Paragraph(f"<b>File:</b> {filename}", normal_style))  
+    elements.append(Paragraph(f"<b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))  
     elements.append(Spacer(1, 20))  
       
-    # Embed TIC Image  
-    if kaleido_available and tic_fig:  
-        tic_img_bytes = tic_fig.to_image(format='png', scale=2)  
-        tic_image = RLImage(io.BytesIO(tic_img_bytes))  
-        tic_image.drawWidth = 6*inch  
-        tic_image.drawHeight = 4*inch  
-        elements.append(Paragraph("<b>Total Ion Chromatogram</b>", normal_style))  
-        elements.append(Spacer(1, 10))  
-        elements.append(tic_image)  
-        elements.append(Spacer(1, 20))  
+    # Add TIC plot  
+    elements.append(Paragraph("<b>Total Ion Chromatogram</b>", heading_style))  
+    elements.append(Spacer(1, 10))  
       
-    # Embed EIC Image if available  
-    if kaleido_available and eic_fig:  
-        eic_img_bytes = eic_fig.to_image(format='png', scale=2)  
-        eic_image = RLImage(io.BytesIO(eic_img_bytes))  
-        eic_image.drawWidth = 6*inch  
-        eic_image.drawHeight = 4*inch  
-        elements.append(Paragraph("<b>Extracted Ion Chromatogram</b>", normal_style))  
-        elements.append(Spacer(1, 10))  
-        elements.append(eic_image)  
-        elements.append(Spacer(1, 20))  
+    # Export TIC plot as image  
+    if kaleido_available:  
+        try:  
+            tic_fig.write_image("temp_tic.png", scale=2)  
+            tic_img = RLImage("temp_tic.png", width=6.5*inch, height=4*inch)  
+            elements.append(tic_img)  
+        except Exception as e:  
+            elements.append(Paragraph(f"Error generating TIC image: {str(e)}", normal_style))  
+    else:  
+        elements.append(Paragraph("Kaleido package not available. Cannot include plot images.", normal_style))  
       
-    # Embed Mass Spectra Table  
+    elements.append(Spacer(1, 20))  
+      
+    # Add EIC plot  
+    elements.append(Paragraph(f"<b>Extracted Ion Chromatogram (m/z {target_mass} ± {tolerance})</b>", heading_style))  
+    elements.append(Spacer(1, 10))  
+      
+    # Export EIC plot as image  
+    if kaleido_available:  
+        try:  
+            eic_fig.write_image("temp_eic.png", scale=2)  
+            eic_img = RLImage("temp_eic.png", width=6.5*inch, height=4*inch)  
+            elements.append(eic_img)  
+        except Exception as e:  
+            elements.append(Paragraph(f"Error generating EIC image: {str(e)}", normal_style))  
+      
+    elements.append(Spacer(1, 20))  
+      
+    # Add mass spectra data table  
     if not mass_df.empty:  
         data = [mass_df.columns.to_list()] + mass_df.values.tolist()  
         mass_table = Table(data, hAlign='CENTER')  
@@ -174,14 +273,14 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, pdf_title, target_mas
             ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),  
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey)  
         ]))  
-        elements.append(Paragraph("<b>Top 10 Mass Spectra Peaks</b>", normal_style))  
+        elements.append(Paragraph("<b>Top 10 Mass Spectra Peaks</b>", heading_style))  
         elements.append(Spacer(1, 10))  
         elements.append(mass_table)  
         elements.append(Spacer(1, 20))  
       
-    # Additional details (for example purposes)  
+    # Additional details  
     elements.append(Paragraph(f"Extracted Ion Chromatogram generated for target mass <b>{target_mass}</b> ± <b>{tolerance}</b> m/z.", normal_style))  
-    elements.append(Spacer(1,30))  
+    elements.append(Spacer(1, 30))  
       
     # Footer  
     elements.append(Paragraph("© 2025 Kapelczak Metabolomics", right_style))  
@@ -215,3 +314,94 @@ if uploaded_file is not None:
             mode=mode,  
             line=dict(color="#2563EB"),  
             marker=dict(color="#D324EB", size=6)  
+        ))  
+        tic_fig.update_layout(  
+            title=dict(text="Total Ion Chromatogram", x=0.5, xanchor="center", font=dict(size=20, color="#171717")),  
+            xaxis_title="Retention Time (s)",  
+            yaxis_title="Intensity",  
+            plot_bgcolor="#FFFFFF",  
+            paper_bgcolor="#FFFFFF"  
+        )  
+        st.plotly_chart(tic_fig)  
+      
+        # Extract Mass Spectra  
+        mass_df = extract_mass_spectra(experiment)  
+        if mass_df.empty:  
+            st.warning("No mass spectra data available.")  
+        else:  
+            st.subheader("Mass Spectra Data (Top 10)")  
+            st.dataframe(mass_df.head(10))  
+          
+        # EIC extraction settings  
+        st.markdown("### Extract Ion Chromatogram (EIC)")  
+        col1, col2 = st.columns(2)  
+        with col1:  
+            target_mass = st.number_input("Target m/z", value=400.0, min_value=0.0, format="%.4f")  
+        with col2:  
+            tolerance = st.number_input("Mass Tolerance (±)", value=0.5, min_value=0.0001, format="%.4f")  
+          
+        # Extract EIC  
+        eic_times, eic_intensities = extract_eic(experiment, target_mass, tolerance)  
+          
+        # Plot EIC  
+        eic_fig = go.Figure()  
+        eic_fig.add_trace(go.Scatter(  
+            x=eic_times,  
+            y=eic_intensities,  
+            mode="lines",  
+            line=dict(color="#24EB84")  
+        ))  
+        eic_fig.update_layout(  
+            title=dict(text=f"Extracted Ion Chromatogram (m/z {target_mass} ± {tolerance})", x=0.5, xanchor="center", font=dict(size=20, color="#171717")),  
+            xaxis_title="Retention Time (s)",  
+            yaxis_title="Intensity",  
+            plot_bgcolor="#FFFFFF",  
+            paper_bgcolor="#FFFFFF"  
+        )  
+        st.plotly_chart(eic_fig)  
+          
+        # PDF Report Generation  
+        st.markdown("### PDF Report")  
+        if st.button("Generate PDF Report"):  
+            with st.spinner("Generating PDF report..."):  
+                # Create PDF report  
+                pdf_buffer = create_pdf_report(  
+                    filename=uploaded_file.name,  
+                    tic_fig=tic_fig,  
+                    eic_fig=eic_fig,  
+                    mass_df=mass_df.head(10),  
+                    target_mass=target_mass,  
+                    tolerance=tolerance,  
+                    pdf_title=pdf_title_input  
+                )  
+                  
+                # Create download link  
+                download_link = get_download_link(pdf_buffer, uploaded_file.name.split('.')[0])  
+                  
+                # Display download link with custom styling  
+                st.markdown("""  
+                <style>  
+                .download-button {  
+                    display: inline-block;  
+                    padding: 0.75em 1.5em;  
+                    color: white;  
+                    background-color: #2563EB;  
+                    border-radius: 6px;  
+                    text-decoration: none;  
+                    font-weight: bold;  
+                    margin-top: 15px;  
+                    box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);  
+                    transition: all 0.3s ease;  
+                }  
+                .download-button:hover {  
+                    background-color: #1D4ED8;  
+                    box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);  
+                    transform: translateY(-2px);  
+                }  
+                </style>  
+                """, unsafe_allow_html=True)  
+                  
+                st.markdown(download_link, unsafe_allow_html=True)  
+                st.success("PDF report generated successfully! Click the button above to download.")  
+else:  
+    st.info("Please upload an mzML file to begin.")  
