@@ -8,7 +8,7 @@ import base64
 from datetime import datetime    
 from pyopenms import MSExperiment, MzMLFile    
 import os    
-from PIL import Image    
+from PIL import Image  
   
 # Import reportlab components for PDF generation    
 from reportlab.lib.pagesizes import letter    
@@ -16,7 +16,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle    
 from reportlab.lib import colors    
 from reportlab.lib.units import inch    
-from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT    
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT  
   
 # Try to import kaleido for Plotly image export    
 try:    
@@ -29,7 +29,7 @@ except ImportError:
     os.system("pip install -U kaleido")    
     st.info("Please restart the app after installation.")    
   
-# Set page configuration and title    
+# Set Streamlit page configuration and title    
 st.set_page_config(page_title="mzML Chromatogram Viewer", layout="wide")    
 st.title("mzML Chromatogram Viewer")    
   
@@ -53,12 +53,13 @@ tabs = st.tabs(["mzML Viewer", "MS2 Spectral Matching"])
 # -----------------------------------------------  
   
 def load_mzml_file(file_path):  
+    """Load an mzML file and return an MSExperiment object"""  
     exp = MSExperiment()  
     MzMLFile().load(file_path, exp)  
     return exp  
   
 def extract_chromatogram(exp):  
-    # Extract TIC (Total Ion Chromatogram)  
+    """Extract retention times and intensities for TIC"""  
     times = []  
     intensities = []  
     for spec in exp:  
@@ -67,52 +68,46 @@ def extract_chromatogram(exp):
             intensities.append(sum(spec.get_peaks()[1]))  
     return times, intensities  
   
-def extract_eic(exp, target_mass, tolerance=0.5):  
-    # Extract EIC (Extracted Ion Chromatogram) for a specific m/z value  
+def extract_mass_spectra(exp):  
+    """Extract mass spectra data into a DataFrame"""  
+    data = []  
+    for i, spec in enumerate(exp):  
+        if spec.getMSLevel() == 1 and i < 100:  # Limit to first 100 MS1 spectra  
+            rt = spec.getRT()  
+            mzs, ints = spec.get_peaks()  
+            for j in range(min(5, len(mzs))):  # Take up to 5 peaks per spectrum  
+                data.append({  
+                    "RT (s)": rt,  
+                    "m/z": mzs[j],  
+                    "Intensity": ints[j]  
+                })  
+    return pd.DataFrame(data)  
+  
+def extract_ion_chromatogram(exp, target_mass, tolerance=0.1):  
+    """Extract ion chromatogram for a specific m/z value"""  
     times = []  
     intensities = []  
     for spec in exp:  
         if spec.getMSLevel() == 1:  # MS1 level  
             rt = spec.getRT()  
             mzs, ints = spec.get_peaks()  
-            # Find intensities within the mass tolerance  
-            for i, mz in enumerate(mzs):  
-                if abs(mz - target_mass) <= tolerance:  
-                    times.append(rt)  
-                    intensities.append(ints[i])  
-                    break  
-            else:  
-                # No matching peak found, add zero intensity  
-                times.append(rt)  
-                intensities.append(0)  
+            intensity_sum = 0  
+            for i in range(len(mzs)):  
+                if abs(mzs[i] - target_mass) <= tolerance:  
+                    intensity_sum += ints[i]  
+            times.append(rt)  
+            intensities.append(intensity_sum)  
     return times, intensities  
   
-def extract_mass_spectra(exp, max_spectra=100):  
-    # Extract mass spectra data for the first max_spectra MS1 spectra  
-    data = []  
-    count = 0  
-    for spec in exp:  
-        if spec.getMSLevel() == 1 and count < max_spectra:  # MS1 level  
-            rt = spec.getRT()  
-            mzs, ints = spec.get_peaks()  
-            # Take top 5 peaks  
-            if len(mzs) > 0:  
-                sorted_indices = np.argsort(ints)[-5:]  
-                for idx in sorted_indices:  
-                    data.append({  
-                        "RT (s)": round(rt, 2),  
-                        "m/z": round(mzs[idx], 4),  
-                        "Intensity": int(ints[idx])  
-                    })  
-                count += 1  
-    return pd.DataFrame(data)  
-  
-def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title="mzML Report"):  
-    # Create a PDF report with the chromatogram and mass spectra data  
+def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title="mzML Analysis Report"):  
+    """Create a PDF report with TIC, EIC, and mass spectra data"""  
+    # Create a buffer for the PDF  
     pdf_buffer = io.BytesIO()  
+      
+    # Create the PDF document  
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, title=title)  
       
-    # Create styles  
+    # Define styles  
     styles = getSampleStyleSheet()  
     styles.add(ParagraphStyle(  
         name='HeaderStyle',  
@@ -123,19 +118,6 @@ def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title
         spaceAfter=12  
     ))  
     styles.add(ParagraphStyle(  
-        name='NormalStyle',  
-        parent=styles['Normal'],  
-        fontName='Helvetica',  
-        fontSize=10,  
-        textColor=colors.HexColor("#171717"),  
-        spaceAfter=6  
-    ))  
-      
-    # Create flowables (content elements)  
-    flowables = []  
-      
-    # Add title and date  
-    title_style = ParagraphStyle(  
         name='TitleStyle',  
         parent=styles['Heading1'],  
         fontName='Helvetica-Bold',  
@@ -143,22 +125,31 @@ def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title
         textColor=colors.HexColor("#171717"),  
         alignment=TA_CENTER,  
         spaceAfter=20  
-    )  
-    flowables.append(Paragraph(title, title_style))  
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
-    flowables.append(Paragraph(f"Generated on: {date_str}", styles["NormalStyle"]))  
-    flowables.append(Spacer(1, 20))  
+    ))  
+      
+    # Create a list to hold the PDF elements  
+    flowables = []  
       
     # Add logo if available  
     if os.path.exists("temp_logo.png"):  
-        img = Image.open("temp_logo.png")  
-        width, height = img.size  
-        aspect_ratio = width / height  
-        img_width = 2 * inch  
-        img_height = img_width / aspect_ratio  
-        rl_img = RLImage("temp_logo.png", width=img_width, height=img_height)  
-        flowables.append(rl_img)  
-        flowables.append(Spacer(1, 12))  
+        try:  
+            img = Image.open("temp_logo.png")  
+            width, height = img.size  
+            aspect = width / height  
+            logo_width = 2 * inch  
+            logo_height = logo_width / aspect  
+            logo = RLImage("temp_logo.png", width=logo_width, height=logo_height)  
+            flowables.append(logo)  
+            flowables.append(Spacer(1, 12))  
+        except Exception as e:  
+            # If logo fails, just continue without it  
+            pass  
+      
+    # Add title and timestamp  
+    flowables.append(Paragraph(title, styles["TitleStyle"]))  
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
+    flowables.append(Paragraph(f"Generated on: {timestamp}", styles["Normal"]))  
+    flowables.append(Spacer(1, 20))  
       
     # Add TIC plot  
     tic_img_bytes = tic_fig.to_image(format="png")  
@@ -174,8 +165,8 @@ def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title
     with open("eic_temp.png", "wb") as f:  
         f.write(eic_img_bytes)  
     rl_eic = RLImage("eic_temp.png", width=6*inch, height=3*inch)  
-    masses_str = ", ".join(["{:.3f}".format(m) for m in target_masses])  
-    flowables.append(Paragraph("Extracted Ion Chromatogram (EIC) for target masses: " + masses_str + " (±" + str(tolerance) + ")", styles["HeaderStyle"]))  
+    masses_str = ", ".join([f"{m:.3f}" for m in target_masses])  
+    flowables.append(Paragraph(f"Extracted Ion Chromatogram (EIC) for target masses: {masses_str} (±{tolerance})", styles["HeaderStyle"]))  
     flowables.append(rl_eic)  
     flowables.append(Spacer(1, 12))  
       
@@ -185,24 +176,26 @@ def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title
     data = [sample_df.columns.to_list()] + sample_df.values.tolist()  
     table = Table(data)  
       
-    # Fixed: Use individual color objects for each style element  
-    tbl_style = TableStyle([  
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2563EB")),  
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),  
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),  
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),  
-        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),  
-        ('GRID', (0, 0), (-1, -1), 1, colors.grey)  
+    # Create individual style commands - this is where the error was happening  
+    table_style = TableStyle([  
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2563EB")),  # Header background  
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),                 # Header text  
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),                        # Center all text  
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),              # Bold header  
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),                       # Header padding  
+        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),          # Row background  
+        ('GRID', (0, 0), (-1, -1), 1, colors.lightgrey)               # Grid lines  
     ])  
-    table.setStyle(tbl_style)  
+    table.setStyle(table_style)  
     flowables.append(table)  
       
+    # Build the PDF  
     doc.build(flowables)  
     pdf_buffer.seek(0)  
     return pdf_buffer  
   
 def get_download_link(pdf_buffer, base_filename):  
+    """Create an HTML download link for the PDF buffer"""  
     b64_pdf = base64.b64encode(pdf_buffer.read()).decode('utf-8')  
     download_link = f'<a class="download-button" href="data:application/pdf;base64,{b64_pdf}" download="{base_filename}_report.pdf">Download PDF Report</a>'  
     return download_link  
@@ -217,7 +210,7 @@ with tabs[1]:
     if query_input:  
         try:  
             query_intensities = [float(x.strip()) for x in query_input.split(",")]  
-            # Dummy spectral matching: sort by sum of intensities (just for demonstration)  
+            # Dummy spectral matching: generate some dummy similarity scores  
             library_spectra = [  
                 ('Spectrum_A', np.random.uniform(0.8, 1.0)),  
                 ('Spectrum_B', np.random.uniform(0.5, 0.8)),  
@@ -262,7 +255,7 @@ with tabs[0]:
       
     if uploaded_file is not None:  
         try:  
-            # Save uploaded mzML file temporarily  
+            # Save the uploaded mzML file  
             temp_file_path = "temp_upload.mzML"  
             with open(temp_file_path, "wb") as f:  
                 f.write(uploaded_file.getbuffer())  
@@ -283,57 +276,57 @@ with tabs[0]:
             )  
             st.plotly_chart(tic_fig)  
               
-            # Input for target masses - MOVED ABOVE the EIC display  
-            target_mass_input = st.text_input("Enter target mass values (comma-separated)", "400.0, 500.0")  
-            tolerance = st.number_input("Mass tolerance (±)", min_value=0.01, max_value=10.0, value=0.5, step=0.1)  
+            # Input for target masses  
+            st.markdown("### Extract Ion Chromatograms")  
+            mass_input = st.text_input("Enter target mass values (comma-separated)", "400.0, 500.0")  
+            tolerance = st.slider("Mass tolerance (±Da)", min_value=0.01, max_value=1.0, value=0.1, step=0.01)  
               
-            # Parse target masses  
-            try:  
-                target_masses = [float(mass.strip()) for mass in target_mass_input.split(",")]  
-                  
-                # Plot EIC for each target mass  
-                eic_fig = go.Figure()  
-                  
-                # Color palette for multiple traces  
-                colors = ["#2563EB", "#24EB84", "#B2EB24", "#EB3424", "#D324EB"]  
-                  
-                for i, target_mass in enumerate(target_masses):  
-                    eic_times, eic_intensities = extract_eic(exp, target_mass, tolerance)  
-                    color_idx = i % len(colors)  
-                    eic_fig.add_trace(go.Scatter(  
-                        x=eic_times,   
-                        y=eic_intensities,   
-                        mode='lines',   
-                        name=f"m/z {target_mass:.3f}",  
-                        line=dict(color=colors[color_idx])  
-                    ))  
-                  
-                eic_fig.update_layout(  
-                    title=f"Extracted Ion Chromatogram (EIC) for Target Masses (±{tolerance})",  
-                    xaxis_title="Retention Time (s)",  
-                    yaxis_title="Intensity",  
-                    plot_bgcolor="#FFFFFF",  
-                    paper_bgcolor="#FFFFFF"  
-                )  
-                  
-                # Display EIC plot BELOW the mass selection inputs  
-                st.plotly_chart(eic_fig)  
-                  
-                # Display mass spectra data  
-                st.markdown("### Mass Spectra Data (Sample)")  
-                st.dataframe(mass_df.head())  
-                  
-                # Generate PDF report  
-                if st.button("Generate PDF Report"):  
-                    try:  
-                        pdf_buffer = create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, pdf_title_input)  
-                        st.markdown(get_download_link(pdf_buffer, "mzml_analysis"), unsafe_allow_html=True)  
-                        st.success("PDF report generated successfully!")  
-                    except Exception as e:  
-                        st.error(f"Error generating PDF report: {str(e)}")  
-                          
-            except ValueError as e:  
-                st.error(f"Invalid mass input: {str(e)}")  
-                  
+            if mass_input:  
+                try:  
+                    # Parse target masses  
+                    target_masses = [float(m.strip()) for m in mass_input.split(",")]  
+                      
+                    # Plot EIC for each target mass  
+                    eic_fig = go.Figure()  
+                    colors = ["#24EB84", "#B2EB24", "#EB3424", "#D324EB", "#2563EB"]  # Color palette  
+                      
+                    for i, mass in enumerate(target_masses):  
+                        eic_times, eic_intensities = extract_ion_chromatogram(exp, mass, tolerance)  
+                        color_idx = i % len(colors)  
+                        eic_fig.add_trace(go.Scatter(  
+                            x=eic_times,  
+                            y=eic_intensities,  
+                            mode='lines',  
+                            name=f"m/z {mass:.3f}",  
+                            line=dict(color=colors[color_idx])  
+                        ))  
+                      
+                    eic_fig.update_layout(  
+                        title=f"Extracted Ion Chromatogram (EIC) for Target Masses (±{tolerance} Da)",  
+                        xaxis_title="Retention Time (s)",  
+                        yaxis_title="Intensity",  
+                        plot_bgcolor="#FFFFFF",  
+                        paper_bgcolor="#FFFFFF"  
+                    )  
+                      
+                    # Display EIC plot BELOW the mass selection inputs  
+                    st.plotly_chart(eic_fig)  
+                      
+                    # Display mass spectra data  
+                    st.markdown("### Mass Spectra Data (Sample)")  
+                    st.dataframe(mass_df.head())  
+                      
+                    # Generate PDF report  
+                    if st.button("Generate PDF Report"):  
+                        try:  
+                            pdf_buffer = create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, pdf_title_input)  
+                            st.markdown(get_download_link(pdf_buffer, "mzml_analysis"), unsafe_allow_html=True)  
+                            st.success("PDF report generated successfully!")  
+                        except Exception as e:  
+                            st.error(f"Error generating PDF report: {str(e)}")  
+                              
+                except ValueError as e:  
+                    st.error(f"Invalid mass input: {str(e)}")  
+                      
         except Exception as e:  
             st.error(f"Error processing mzML file: {str(e)}")  
