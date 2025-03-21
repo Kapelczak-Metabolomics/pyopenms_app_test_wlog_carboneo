@@ -8,6 +8,7 @@ import base64
 from datetime import datetime  
 from pyopenms import MSExperiment, MzMLFile  
 import os  
+<<<<<<< HEAD
 from PIL import Image  
 import os  
   
@@ -18,6 +19,8 @@ except ImportError:
     st.info("Installing python-docx...")  
     os.system("pip install python-docx")  
     import docx  
+=======
+>>>>>>> parent of 610a546 (Update app.py)
   
 # Import reportlab components for PDF generation  
 from reportlab.lib.pagesizes import letter  
@@ -100,6 +103,7 @@ def extract_mass_spectra(exp):
 =======
     chrom = chromatograms[0]  
     peaks = chrom.get_peaks()  
+    # If peaks is a tuple (e.g., numpy arrays), assume first element is time and second intensities  
     if isinstance(peaks, tuple):  
         times, intensities = peaks  
     else:  
@@ -108,28 +112,21 @@ def extract_mass_spectra(exp):
     return times, intensities  
   
 def extract_mass_spectra(exp):  
+    # Extract mass spectra data into a DataFrame of top 10 peaks  
     spectra = exp.getSpectra()  
-    masses = []  
-    intensities = []  
-    rts = []  
-      
+    peaks_data = []  
     for spectrum in spectra:  
-        rt = spectrum.getRT()  
-        peaks = spectrum.get_peaks()  
-          
-        if isinstance(peaks, tuple):  
-            mz_values, intensity_values = peaks  
-        else:  
-            mz_values = [p.getMZ() for p in peaks]  
-            intensity_values = [p.getIntensity() for p in peaks]  
-          
-        for mz, intensity in zip(mz_values, intensity_values):  
-            masses.append(mz)  
-            intensities.append(intensity)  
-            rts.append(rt)  
-      
-    if not masses:  
+        mz_array = spectrum.get_peaks()[0] if isinstance(spectrum.get_peaks(), tuple) else [p.getMZ() for p in spectrum.get_peaks()]  
+        intensity_array = spectrum.get_peaks()[1] if isinstance(spectrum.get_peaks(), tuple) else [p.getIntensity() for p in spectrum.get_peaks()]  
+        for m, inten in zip(mz_array, intensity_array):  
+            peaks_data.append({"m/z": m, "Intensity": inten})  
+    if peaks_data:  
+        df = pd.DataFrame(peaks_data)  
+        df = df.sort_values("Intensity", ascending=False).drop_duplicates("m/z")  
+        return df.head(10)  
+    else:  
         return pd.DataFrame()  
+<<<<<<< HEAD
       
     df = pd.DataFrame({  
         'Retention Time (s)': rts,  
@@ -283,132 +280,83 @@ def generate_pdf_via_carbone(template_file, data, api_key):
             intensities.append(0)  
       
     return times, intensities  
+=======
   
-def get_download_link(buffer, filename):  
-    b64 = base64.b64encode(buffer.getvalue()).decode()  
-    return f'<a href="data:application/pdf;base64,{b64}" download="{filename}_report.pdf" class="download-button">Download PDF Report</a>'  
+def get_download_link(pdf_buffer, filename):  
+    b64 = base64.b64encode(pdf_buffer.read()).decode()  
+    href = f'<a class="download-button" href="data:application/octet-stream;base64,{b64}" download="{filename}">Download PDF Report</a>'  
+    return href  
+>>>>>>> parent of 610a546 (Update app.py)
   
-def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_mass, tolerance, pdf_title):  
+def create_pdf_report(filename, tic_fig, eic_fig, mass_df, pdf_title, target_mass=0, tolerance=0):  
     pdf_buffer = io.BytesIO()  
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)  
-      
-    # Create styles  
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter,  
+                            rightMargin=72, leftMargin=72,  
+                            topMargin=72, bottomMargin=72)  
     styles = getSampleStyleSheet()  
-    custom_title_style = ParagraphStyle(  
-        name='CustomTitle',  
-        fontName='Helvetica-Bold',  
-        fontSize=18,  
-        leading=22,  
-        alignment=TA_CENTER,  
-        spaceAfter=12,  
-        textColor=colors.HexColor("#2563EB")  
-    )  
+    # Create custom styles with unique names to avoid conflicts  
+    custom_title_style = ParagraphStyle(name='CustomTitle', parent=styles['Heading1'],  
+                                        fontName='Helvetica-Bold', fontSize=22, leading=26, alignment=TA_CENTER)  
+    normal_style = styles['Normal']  
+    right_style = ParagraphStyle(name='Right', parent=styles['Normal'], alignment=TA_RIGHT)  
       
-    heading_style = ParagraphStyle(  
-        name='CustomHeading',  
-        fontName='Helvetica-Bold',  
-        fontSize=14,  
-        leading=18,  
-        spaceAfter=6,  
-        textColor=colors.HexColor("#2563EB")  
-    )  
-      
-    normal_style = ParagraphStyle(  
-        name='CustomNormal',  
-        fontName='Helvetica',  
-        fontSize=12,  
-        leading=14,  
-        spaceAfter=6  
-    )  
-      
-    right_style = ParagraphStyle(  
-        name='CustomRight',  
-        fontName='Helvetica',  
-        fontSize=10,  
-        leading=12,  
-        alignment=TA_RIGHT  
-    )  
-      
-    # Elements to add to the PDF  
     elements = []  
       
-    # Add logo if available  
+    # Add header: Logo on top-right, Title centered.  
+    header_table_data = []  
+    logo_image = None  
     if os.path.exists("temp_logo.png"):  
-        try:  
-            # Get the original image dimensions  
-            img = Image.open("temp_logo.png")  
-            img_width, img_height = img.size  
-              
-            # Calculate the aspect ratio  
-            aspect_ratio = img_height / img_width  
-              
-            # Set a maximum width for the logo (2 inches)  
-            max_width = 2 * inch  
-              
-            # Calculate the height based on the aspect ratio  
-            logo_width = min(max_width, img_width)  
-            logo_height = logo_width * aspect_ratio  
-              
-            # Create a table for the header with logo and title  
-            logo_img = RLImage("temp_logo.png", width=logo_width, height=logo_height)  
-              
-            # Create a table for the header  
-            header_data = [[logo_img, Paragraph(pdf_title, custom_title_style)]]  
-            header_table = Table(header_data, colWidths=[logo_width, 5*inch])  
-            header_table.setStyle(TableStyle([  
-                ('ALIGN', (0, 0), (0, 0), 'LEFT'),  
-                ('ALIGN', (1, 0), (1, 0), 'RIGHT'),  
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  
-            ]))  
-            elements.append(header_table)  
-        except Exception as e:  
-            # If there's an error with the logo, just add the title  
-            elements.append(Paragraph(pdf_title, custom_title_style))  
-            elements.append(Paragraph(f"Logo error: {str(e)}", normal_style))  
-    else:  
-        # No logo, just add the title  
-        elements.append(Paragraph(pdf_title, custom_title_style))  
-      
+        # Use the original logo dimensions, but cap the width if it is too wide.  
+        logo_image = RLImage("temp_logo.png")  
+        logo_image.drawWidth = min(2*inch, logo_image.drawWidth)  
+        logo_image.drawHeight = logo_image.drawHeight * (logo_image.drawWidth / logo_image.imageWidth)  
+    header_data = []  
+    # Left cell empty, middle cell PDF Title, right cell logo  
+    header_data.append(["", f"<b>{pdf_title}</b>", ""])  
+    header_table = Table(header_data, colWidths=[2*inch, 3*inch, 2*inch])  
+    header_table.setStyle(TableStyle([  
+        ('ALIGN', (1,0), (1,0), 'CENTER'),  
+        ('VALIGN', (1,0), (1,0), 'MIDDLE')  
+    ]))  
+    elements.append(header_table)  
     elements.append(Spacer(1, 20))  
       
-    # Add file information  
-    elements.append(Paragraph(f"<b>File:</b> {filename}", normal_style))  
-    elements.append(Paragraph(f"<b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))  
+    if logo_image:  
+        # Place the logo at the top right by creating a table with the logo only in the right cell  
+        logo_table = Table([["", logo_image]], colWidths=[4*inch, 2*inch])  
+        logo_table.setStyle(TableStyle([  
+            ('ALIGN', (1,0), (1,0), 'RIGHT'),  
+            ('VALIGN', (1,0), (1,0), 'TOP')  
+        ]))  
+        elements.insert(0, logo_table)  
+      
+    # Add generation timestamp  
+    elements.append(Paragraph(f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", right_style))  
     elements.append(Spacer(1, 20))  
       
-    # Add TIC plot  
-    elements.append(Paragraph("<b>Total Ion Chromatogram</b>", heading_style))  
-    elements.append(Spacer(1, 10))  
+    # Embed TIC Image  
+    if kaleido_available and tic_fig:  
+        tic_img_bytes = tic_fig.to_image(format='png', scale=2)  
+        tic_image = RLImage(io.BytesIO(tic_img_bytes))  
+        tic_image.drawWidth = 6*inch  
+        tic_image.drawHeight = 4*inch  
+        elements.append(Paragraph("<b>Total Ion Chromatogram</b>", normal_style))  
+        elements.append(Spacer(1, 10))  
+        elements.append(tic_image)  
+        elements.append(Spacer(1, 20))  
       
-    # Export TIC plot as image  
-    if kaleido_available:  
-        try:  
-            tic_fig.write_image("temp_tic.png", scale=2)  
-            tic_img = RLImage("temp_tic.png", width=6.5*inch, height=4*inch)  
-            elements.append(tic_img)  
-        except Exception as e:  
-            elements.append(Paragraph(f"Error generating TIC image: {str(e)}", normal_style))  
-    else:  
-        elements.append(Paragraph("Kaleido package not available. Cannot include plot images.", normal_style))  
+    # Embed EIC Image if available  
+    if kaleido_available and eic_fig:  
+        eic_img_bytes = eic_fig.to_image(format='png', scale=2)  
+        eic_image = RLImage(io.BytesIO(eic_img_bytes))  
+        eic_image.drawWidth = 6*inch  
+        eic_image.drawHeight = 4*inch  
+        elements.append(Paragraph("<b>Extracted Ion Chromatogram</b>", normal_style))  
+        elements.append(Spacer(1, 10))  
+        elements.append(eic_image)  
+        elements.append(Spacer(1, 20))  
       
-    elements.append(Spacer(1, 20))  
-      
-    # Add EIC plot  
-    elements.append(Paragraph(f"<b>Extracted Ion Chromatogram (m/z {target_mass} ± {tolerance})</b>", heading_style))  
-    elements.append(Spacer(1, 10))  
-      
-    # Export EIC plot as image  
-    if kaleido_available:  
-        try:  
-            eic_fig.write_image("temp_eic.png", scale=2)  
-            eic_img = RLImage("temp_eic.png", width=6.5*inch, height=4*inch)  
-            elements.append(eic_img)  
-        except Exception as e:  
-            elements.append(Paragraph(f"Error generating EIC image: {str(e)}", normal_style))  
-      
-    elements.append(Spacer(1, 20))  
-      
-    # Add mass spectra data table  
+    # Embed Mass Spectra Table  
     if not mass_df.empty:  
         data = [mass_df.columns.to_list()] + mass_df.values.tolist()  
         mass_table = Table(data, hAlign='CENTER')  
@@ -422,14 +370,14 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_mass, toleranc
             ('BACKGROUND', (0,1), (-1,-1), colors.whitesmoke),  
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey)  
         ]))  
-        elements.append(Paragraph("<b>Top 10 Mass Spectra Peaks</b>", heading_style))  
+        elements.append(Paragraph("<b>Top 10 Mass Spectra Peaks</b>", normal_style))  
         elements.append(Spacer(1, 10))  
         elements.append(mass_table)  
         elements.append(Spacer(1, 20))  
       
-    # Additional details  
+    # Additional details (for example purposes)  
     elements.append(Paragraph(f"Extracted Ion Chromatogram generated for target mass <b>{target_mass}</b> ± <b>{tolerance}</b> m/z.", normal_style))  
-    elements.append(Spacer(1, 30))  
+    elements.append(Spacer(1,30))  
       
     # Footer  
     elements.append(Paragraph("© 2025 Kapelczak Metabolomics", right_style))  
@@ -464,6 +412,7 @@ if uploaded_file is not None:
             mode=mode,  
             line=dict(color="#2563EB"),  
             marker=dict(color="#D324EB", size=6)  
+<<<<<<< HEAD
         ))  
         tic_fig.update_layout(  
             title=dict(text="Total Ion Chromatogram", x=0.5, xanchor="center", font=dict(size=20, color="#171717")),  
@@ -657,3 +606,5 @@ if uploaded_file is not None:
 >>>>>>> parent of 3d1de4d (Update app.py)
 else:  
     st.info("Please upload an mzML file to begin.")  
+=======
+>>>>>>> parent of 610a546 (Update app.py)
