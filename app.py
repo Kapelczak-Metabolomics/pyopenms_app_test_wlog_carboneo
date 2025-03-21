@@ -60,10 +60,12 @@ def extract_chromatogram(exp):
     chromatograms = exp.getChromatograms()  
     if len(chromatograms) == 0:  
         return None, None  
-    # For simplicity, use the first chromatogram which is assumed TIC.  
+    # For simplicity, use the first chromatogram which is assumed to be the TIC.  
     tic = chromatograms[0]  
-    tic_times = [float(point.getMZ()) for point in tic.get_peaks()]  
-    tic_intensities = [float(point.getIntensity()) for point in tic.get_peaks()]  
+    # tic.get_peaks() returns a tuple (times, intensities) as numpy arrays  
+    peaks = tic.get_peaks()  
+    tic_times = peaks[0].tolist()   # Convert numpy array to list  
+    tic_intensities = peaks[1].tolist()  
     return tic_times, tic_intensities  
   
 def extract_mass_spectra(exp):  
