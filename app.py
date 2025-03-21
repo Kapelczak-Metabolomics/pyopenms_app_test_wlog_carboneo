@@ -11,6 +11,15 @@ import tempfile
 from datetime import datetime  
 from pyopenms import MSExperiment, MzMLFile  
 from PIL import Image  
+import os  
+  
+# Install required packages if not already installed  
+try:  
+    import docx  
+except ImportError:  
+    st.info("Installing python-docx...")  
+    os.system("pip install python-docx")  
+    import docx  
   
 # Try to import kaleido for Plotly image export  
 try:  
@@ -20,7 +29,6 @@ except ImportError:
     kaleido_available = False  
     st.warning("Kaleido package is required for image export. Install it using 'pip install -U kaleido'")  
     st.info("Attempting to install kaleido...")  
-    import os  
     os.system("pip install -U kaleido")  
     st.info("Please restart the app after installation.")  
   
@@ -69,33 +77,138 @@ def extract_chromatogram(exp):
     return tic_times, tic_intensities  
   
 def extract_mass_spectra(exp):  
-    # Dummy extraction of mass spectra peaks for demonstration.  
-    # In practice, this function should extract real peak data.  
-    data = {'m/z': np.linspace(50, 1000, 10), 'Intensity': np.random.randint(100, 1000, 10)}  
-    mass_df = pd.DataFrame(data)  
-    return mass_df  
+    spectra = exp.getSpectra()  
+    if len(spectra) == 0:  
+        return pd.DataFrame()  
+      
+    # Get the first spectrum for demonstration  
+    spectrum = spectra[0]  
+    peaks = spectrum.get_peaks()  
+    mz_values = peaks[0]  
+    intensities = peaks[1]  
+      
+    # Create a DataFrame with the top peaks by intensity  
+    df = pd.DataFrame({  
+        "m/z": mz_values,  
+        "Intensity": intensities  
+    })  
+    df = df.sort_values(by="Intensity", ascending=False).reset_index(drop=True)  
+    return df  
   
-def fig_to_png_bytes(fig):  
-    # Export the plotly figure to PNG using kaleido at high resolution  
-    png_bytes = fig.to_image(format="png", scale=2)  
-    return png_bytes  
+def extract_eic(exp, target_mass, tolerance):  
+    spectra = exp.getSpectra()  
+    if len(spectra) == 0:  
+        return None, None  
+      
+    rt_values = []  
+    intensities = []  
+      
+    for spectrum in spectra:  
+        rt = spectrum.getRT()  
+        peaks = spectrum.get_peaks()  
+        mz_values = peaks[0]  
+        peak_intensities = peaks[1]  
+          
+        # Find peaks within the mass tolerance  
+        for i, mz in enumerate(mz_values):  
+            if abs(mz - target_mass) <= tolerance:  
+                rt_values.append(rt)  
+                intensities.append(peak_intensities[i])  
+                break  
+        else:  
+            # No peak found within tolerance, add 0 intensity  
+            rt_values.append(rt)  
+            intensities.append(0)  
+      
+    return rt_values, intensities  
   
-def generate_pdf_via_carbone(template_file, data_payload, api_key):  
+# Function to create a DOCX template for Carbone.io  
+def create_docx_template():  
+    doc = docx.Document()  
+      
+    # Add title with placeholder  
+    doc.add_heading('{title}', level=1)  
+      
+    # Add date and filename  
+    doc.add_paragraph('Date: {date}')  
+    doc.add_paragraph('Filename: {filename}')  
+      
+    # Add placeholder for TIC image  
+    p = doc.add_paragraph()  
+    p.add_run().add_text('Total Ion Chromatogram:')  
+    doc.add_paragraph('{tic_image}')  
+      
+    # Add placeholder for mass spectra table  
+    doc.add_heading('Mass Spectra Data (Top 10)', level=2)  
+    doc.add_paragraph('{mass_data}')  
+      
+    # Add placeholder for EIC image  
+    p = doc.add_paragraph()  
+    p.add_run().add_text('Extracted Ion Chromatogram:')  
+    doc.add_paragraph('{eic_image}')  
+      
+    # Add footer  
+    section = doc.sections[0]  
+    footer = section.footer  
+    footer_para = footer.paragraphs[0]  
+    footer_para.text = '{footer}'  
+      
+    # Save the template  
+    template_path = "generated_template.docx"  
+    doc.save(template_path)  
+    return template_path  
+  
+# Function to generate PDF via Carbone.io API  
+def generate_pdf_via_carbone(template_file, data, api_key):  
     # Read the DOCX template as binary  
     with open(template_file, "rb") as f:  
         template_data = f.read()  
+      
     # Create a multipart/form-data payload for Carbone.io  
     files = {  
         "template": ("template.docx", template_data, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")  
     }  
-    # Carbone endpoint URL for PDF generation  
-    url = "https://api.carbone.io/render"  
-    headers = {"Authorization": api_key}  
-    response = requests.post(url, data={"data": json.dumps(data_payload)}, files=files, headers=headers)  
-    if response.status_code != 200:  
-        st.error("Failed to generate PDF. Error: " + response.text)  
+      
+    # Convert data to JSON  
+    data_json = json.dumps(data)  
+      
+    # Set up the request  
+    headers = {  
+        "Authorization": f"Bearer {api_key}",  
+        "carbone-version": "4"  
+    }  
+      
+    payload = {  
+        "data": data_json,  
+        "convertTo": "pdf"  
+    }  
+      
+    # Send the request to Carbone.io  
+    try:  
+        response = requests.post(  
+            "https://api.carbone.io/render",  
+            headers=headers,  
+            files=files,  
+            data=payload  
+        )  
+          
+        if response.status_code == 200:  
+            # Get the rendered PDF  
+            render_id = response.json().get("data", {}).get("renderId")  
+            if render_id:  
+                # Get the rendered PDF  
+                pdf_response = requests.get(  
+                    f"https://api.carbone.io/render/{render_id}",  
+                    headers=headers  
+                )  
+                if pdf_response.status_code == 200:  
+                    return pdf_response.content  
+          
+        st.error(f"Error generating PDF: {response.text}")  
         return None  
-    return response.content  
+    except Exception as e:  
+        st.error(f"Error connecting to Carbone.io: {str(e)}")  
+        return None  
   
 # -----------------------------------------------  
 # Main Streamlit app  
@@ -132,6 +245,7 @@ if uploaded_file is not None:
         )  
         st.plotly_chart(tic_fig)  
       
+        # Extract Mass Spectra  
         mass_df = extract_mass_spectra(experiment)  
         if mass_df.empty:  
             st.warning("No mass spectra data available.")  
@@ -139,68 +253,106 @@ if uploaded_file is not None:
             st.subheader("Mass Spectra Data (Top 10)")  
             st.dataframe(mass_df.head(10))  
           
-        # Convert plotly figure to PNG bytes for embedding in PDF via Carbone.io  
-        tic_png = fig_to_png_bytes(tic_fig)  
-        tic_png_b64 = base64.b64encode(tic_png).decode("utf-8")  
+        # EIC extraction settings  
+        st.markdown("### Extract Ion Chromatogram")  
+        col1, col2 = st.columns(2)  
+        with col1:  
+            target_mass = st.number_input("Target m/z", value=400.0, min_value=0.0, format="%.4f")  
+        with col2:  
+            tolerance = st.number_input("Tolerance (±)", value=0.5, min_value=0.0001, format="%.4f")  
           
-        # Handle logo image sizing while preserving aspect ratio (if available)  
-        if logo_file is not None:  
-            logo_img = Image.open("temp_logo.png")  
-            # Maximum width in inches (e.g., 2 inches) converted to pixels (approx 144 pixels per inch)  
-            max_width_pixels = 2 * 144  
-            # Check if image width exceeds max width  
-            if logo_img.width > max_width_pixels:  
-                aspect_ratio = logo_img.height / logo_img.width  
-                new_width = max_width_pixels  
-                new_height = int(new_width * aspect_ratio)  
-                logo_img = logo_img.resize((new_width, new_height))  
-            logo_buffer = io.BytesIO()  
-            logo_img.save(logo_buffer, format="PNG")  
-            logo_data_b64 = base64.b64encode(logo_buffer.getvalue()).decode("utf-8")  
+        eic_times, eic_intensities = extract_eic(experiment, target_mass, tolerance)  
+        if eic_times is None or eic_intensities is None or len(eic_times) == 0:  
+            st.warning(f"No data found for m/z {target_mass} ± {tolerance}")  
+            eic_fig = None  
         else:  
-            logo_data_b64 = ""  
+            show_eic_points = st.checkbox("Show individual data points on EIC", value=True, key="eic_toggle")  
+            eic_mode = "lines+markers" if show_eic_points else "lines"  
+              
+            eic_fig = go.Figure()  
+            eic_fig.add_trace(go.Scatter(  
+                x=eic_times,  
+                y=eic_intensities,  
+                mode=eic_mode,  
+                line=dict(color="#24EB84"),  
+                marker=dict(color="#B2EB24", size=6)  
+            ))  
+            eic_fig.update_layout(  
+                title=dict(text=f"Extracted Ion Chromatogram (m/z {target_mass} ± {tolerance})",   
+                          x=0.5, xanchor="center", font=dict(size=20, color="#171717")),  
+                xaxis_title="Retention Time (s)",  
+                yaxis_title="Intensity",  
+                plot_bgcolor="#FFFFFF",  
+                paper_bgcolor="#FFFFFF"  
+            )  
+            st.plotly_chart(eic_fig)  
           
-        # Prepare the data payload for Carbone template rendering  
-        data_payload = {  
-            "title": pdf_title_input,  
-            "generated_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  
-            "filename": uploaded_file.name,  
-            "tic_image": "data:image/png;base64," + tic_png_b64,  
-            "mass_data": mass_df.to_dict(orient="records"),  
-            "footer": "© 2025 Kapelczak Metabolomics",  
-            "logo_image": "data:image/png;base64," + logo_data_b64 if logo_data_b64 else ""  
-        }  
-          
-        # Assume the DOCX template file is named 'template.docx'  
-        template_file = "template.docx"  
-        with st.spinner("Generating PDF report via Carbone.io..."):  
-            pdf_content = generate_pdf_via_carbone(template_file, data_payload, CARBONE_API_KEY)  
-        if pdf_content is not None:  
-            st.success("PDF report generated successfully!")  
-            # Provide a download link for the generated PDF  
-            b64_pdf = base64.b64encode(pdf_content).decode('utf-8')  
-            href = f'<a href="data:application/pdf;base64,{b64_pdf}" download="{uploaded_file.name.split(".")[0]}_report.pdf"><div class="download-button">Download PDF Report</div></a>'  
-            st.markdown("""  
-                <style>  
-                .download-button {  
-                    display: inline-block;  
-                    padding: 0.75em 1.5em;  
-                    color: white;  
-                    background-color: #2563EB;  
-                    border-radius: 6px;  
-                    text-decoration: none;  
-                    font-weight: bold;  
-                    margin-top: 15px;  
-                    box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);  
-                    transition: all 0.3s ease;  
+        # Generate PDF Report  
+        if st.button("Generate PDF Report"):  
+            with st.spinner("Preparing report data..."):  
+                # Convert plots to base64 images  
+                tic_png_buffer = io.BytesIO()  
+                tic_fig.write_image(tic_png_buffer, format="png", scale=2)  
+                tic_png_buffer.seek(0)  
+                tic_png_b64 = base64.b64encode(tic_png_buffer.read()).decode('utf-8')  
+                  
+                eic_png_b64 = None  
+                if eic_fig is not None:  
+                    eic_png_buffer = io.BytesIO()  
+                    eic_fig.write_image(eic_png_buffer, format="png", scale=2)  
+                    eic_png_buffer.seek(0)  
+                    eic_png_b64 = base64.b64encode(eic_png_buffer.read()).decode('utf-8')  
+                  
+                # Convert logo to base64 if available  
+                logo_data_b64 = None  
+                if os.path.exists("temp_logo.png"):  
+                    with open("temp_logo.png", "rb") as f:  
+                        logo_data_b64 = base64.b64encode(f.read()).decode('utf-8')  
+                  
+                # Create data payload for Carbone.io  
+                data_payload = {  
+                    "title": pdf_title_input,  
+                    "date": datetime.now().strftime("%Y-%m-%d"),  
+                    "filename": uploaded_file.name,  
+                    "tic_image": tic_png_b64,  
+                    "eic_image": eic_png_b64 if eic_png_b64 else "",  
+                    "mass_data": mass_df.head(10).to_dict(orient="records"),  
+                    "footer": "© 2025 Kapelczak Metabolomics",  
+                    "logo": logo_data_b64 if logo_data_b64 else ""  
                 }  
-                .download-button:hover {  
-                    background-color: #1D4ED8;  
-                    box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);  
-                    transform: translateY(-2px);  
-                }  
-                </style>  
-            """, unsafe_allow_html=True)  
-            st.markdown(href, unsafe_allow_html=True)  
+                  
+                # Create a DOCX template  
+                template_file = create_docx_template()  
+                  
+                with st.spinner("Generating PDF report via Carbone.io..."):  
+                    pdf_content = generate_pdf_via_carbone(template_file, data_payload, CARBONE_API_KEY)  
+                  
+                if pdf_content is not None:  
+                    st.success("PDF report generated successfully!")  
+                    # Provide a download link for the generated PDF  
+                    b64_pdf = base64.b64encode(pdf_content).decode('utf-8')  
+                    href = f'<a href="data:application/pdf;base64,{b64_pdf}" download="{uploaded_file.name.split(".")[0]}_report.pdf"><div class="download-button">Download PDF Report</div></a>'  
+                    st.markdown("""  
+                        <style>  
+                        .download-button {  
+                            display: inline-block;  
+                            padding: 0.75em 1.5em;  
+                            color: white;  
+                            background-color: #2563EB;  
+                            border-radius: 6px;  
+                            text-decoration: none;  
+                            font-weight: bold;  
+                            margin-top: 15px;  
+                            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);  
+                            transition: all 0.3s ease;  
+                        }  
+                        .download-button:hover {  
+                            background-color: #1D4ED8;  
+                            box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);  
+                            transform: translateY(-2px);  
+                        }  
+                        </style>  
+                    """, unsafe_allow_html=True)  
+                    st.markdown(href, unsafe_allow_html=True)  
 else:  
     st.info("Please upload an mzML file to begin.")  
