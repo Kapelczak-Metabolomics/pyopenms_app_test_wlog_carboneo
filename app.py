@@ -65,7 +65,7 @@ def extract_chromatogram(exp):
         times.append(spec.getRT())  
         # Calculate TIC by summing all peak intensities  
         peaks = spec.get_peaks()  
-        if len(peaks[1]) > 0:  
+        if len(peaks) > 0 and len(peaks[1]) > 0:  
             total_intensity = sum(peaks[1])  
         else:  
             total_intensity = 0  
@@ -73,7 +73,7 @@ def extract_chromatogram(exp):
     return times, intensities  
   
 def extract_eic(exp, target_mass, tolerance):  
-    # Extract EIC for a specific mass with tolerance  
+    # Extract EIC for a specific mass  
     times = []  
     intensities = []  
     for spec in exp:  
@@ -88,17 +88,23 @@ def extract_eic(exp, target_mass, tolerance):
     return times, intensities  
   
 def extract_mass_spectra(exp):  
-    # Extract mass spectra data  
+    # Extract mass spectra data (first 1000 peaks for demonstration)  
     data = []  
+    count = 0  
     for spec in exp:  
         rt = spec.getRT()  
         mzs, ints = spec.get_peaks()  
-        for i in range(len(mzs)):  
+        for i in range(min(len(mzs), 20)):  # Limit to 20 peaks per spectrum  
             data.append({  
                 "RT": rt,  
                 "m/z": mzs[i],  
                 "Intensity": ints[i]  
             })  
+            count += 1  
+            if count >= 1000:  # Limit to 1000 total peaks  
+                break  
+        if count >= 1000:  
+            break  
     return pd.DataFrame(data)  
   
 def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_masses, tolerance, pdf_title, logo_path=None):  
@@ -108,132 +114,129 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_masses, tolera
     # Define styles  
     styles = getSampleStyleSheet()  
       
-    # Create a modern title style  
+    # Create custom styles for modern look  
     title_style = ParagraphStyle(  
-        'ModernTitle',  
-        parent=styles['Heading1'],  
+        'CustomTitle',  
+        parent=styles['Title'],  
         fontSize=24,  
         fontName='Helvetica-Bold',  
-        textColor=colors.HexColor('#2563EB'),  
-        spaceAfter=20,  
-        alignment=TA_CENTER  
-    )  
-      
-    # Create a modern subtitle style  
-    subtitle_style = ParagraphStyle(  
-        'ModernSubtitle',  
-        parent=styles['Heading2'],  
-        fontSize=16,  
-        fontName='Helvetica-Bold',  
-        textColor=colors.HexColor('#333333'),  
         spaceAfter=12,  
-        spaceBefore=12  
+        textColor=colors.HexColor("#2563EB")  
     )  
       
-    # Create a modern body text style  
-    body_style = ParagraphStyle(  
-        'ModernBody',  
+    heading_style = ParagraphStyle(  
+        'CustomHeading',  
+        parent=styles['Heading1'],  
+        fontSize=18,  
+        fontName='Helvetica-Bold',  
+        spaceAfter=10,  
+        textColor=colors.HexColor("#171717")  
+    )  
+      
+    subheading_style = ParagraphStyle(  
+        'CustomSubheading',  
+        parent=styles['Heading2'],  
+        fontSize=14,  
+        fontName='Helvetica-Bold',  
+        spaceAfter=8,  
+        textColor=colors.HexColor("#4B5563")  
+    )  
+      
+    normal_style = ParagraphStyle(  
+        'CustomNormal',  
         parent=styles['Normal'],  
-        fontSize=11,  
+        fontSize=12,  
         fontName='Helvetica',  
-        textColor=colors.HexColor('#444444'),  
-        spaceAfter=8  
+        spaceAfter=6,  
+        textColor=colors.HexColor("#374151")  
     )  
       
-    # Create a modern info text style  
-    info_style = ParagraphStyle(  
-        'ModernInfo',  
-        parent=styles['Normal'],  
-        fontSize=10,  
-        fontName='Helvetica',  
-        textColor=colors.HexColor('#666666'),  
-        spaceAfter=6  
-    )  
-      
-    # Create a modern table style  
-    table_style = TableStyle([  
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563EB')),  
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),  
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),  
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),  
-        ('FONTSIZE', (0, 0), (-1, 0), 12),  
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),  
-        ('BACKGROUND', (0, 1), (-1, -1), colors.white),  
-        ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#333333')),  
-        ('ALIGN', (0, 1), (-1, -1), 'CENTER'),  
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),  
-        ('FONTSIZE', (0, 1), (-1, -1), 10),  
-        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#DDDDDD')),  
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8F9FA')])  
-    ])  
-      
-    # Build the PDF content  
-    content = []  
+    # Create content elements  
+    elements = []  
       
     # Add logo if provided  
-    if logo_path and os.path.exists(logo_path):  
+    if logo_path is not None:  
         img = Image.open(logo_path)  
         width, height = img.size  
         aspect_ratio = width / height  
           
-        # Set a maximum width for the logo  
-        max_width = 2.5 * inch  
-        img_width = min(max_width, 2.5 * inch)  
+        # Set max width to 2 inches, calculate height based on aspect ratio  
+        img_width = 2 * inch  
         img_height = img_width / aspect_ratio  
           
         logo = RLImage(logo_path, width=img_width, height=img_height)  
-        content.append(logo)  
-        content.append(Spacer(1, 12))  
+        elements.append(logo)  
+        elements.append(Spacer(1, 0.25 * inch))  
       
     # Add title  
-    content.append(Paragraph(pdf_title, title_style))  
-    content.append(Spacer(1, 12))  
+    elements.append(Paragraph(pdf_title, title_style))  
+    elements.append(Spacer(1, 0.25 * inch))  
       
     # Add file info  
-    content.append(Paragraph(f"File: {filename}", subtitle_style))  
-    content.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", info_style))  
-    content.append(Spacer(1, 20))  
+    elements.append(Paragraph("File Information", heading_style))  
+    elements.append(Paragraph(f"Filename: {filename}", normal_style))  
+    elements.append(Paragraph(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))  
+    elements.append(Spacer(1, 0.25 * inch))  
       
     # Add TIC plot  
+    elements.append(Paragraph("Total Ion Chromatogram (TIC)", heading_style))  
+      
+    # Save TIC figure to temporary file  
     if kaleido_available:  
-        tic_img_path = "tic_plot.png"  
+        tic_img_path = "temp_tic.png"  
         tic_fig.write_image(tic_img_path, scale=2)  
-        content.append(Paragraph("Total Ion Chromatogram (TIC)", subtitle_style))  
-        content.append(RLImage(tic_img_path, width=6*inch, height=3*inch))  
-        content.append(Spacer(1, 20))  
+        tic_img = RLImage(tic_img_path, width=6*inch, height=4*inch)  
+        elements.append(tic_img)  
+    else:  
+        elements.append(Paragraph("TIC plot image export requires kaleido package.", normal_style))  
+      
+    elements.append(Spacer(1, 0.25 * inch))  
       
     # Add EIC plot  
+    mass_str = ", ".join([str(m) for m in target_masses])  
+    elements.append(Paragraph(f"Extracted Ion Chromatogram (m/z: {mass_str}, tolerance: ±{tolerance})", heading_style))  
+      
+    # Save EIC figure to temporary file  
     if kaleido_available:  
-        eic_img_path = "eic_plot.png"  
+        eic_img_path = "temp_eic.png"  
         eic_fig.write_image(eic_img_path, scale=2)  
-        content.append(Paragraph(f"Extracted Ion Chromatogram (EIC) for m/z: {', '.join([str(m) for m in target_masses])} ± {tolerance}", subtitle_style))  
-        content.append(RLImage(eic_img_path, width=6*inch, height=3*inch))  
-        content.append(Spacer(1, 20))  
+        eic_img = RLImage(eic_img_path, width=6*inch, height=4*inch)  
+        elements.append(eic_img)  
+    else:  
+        elements.append(Paragraph("EIC plot image export requires kaleido package.", normal_style))  
       
-    # Add mass spectra data table  
-    content.append(Paragraph("Mass Spectra Data (Top 10 Peaks)", subtitle_style))  
+    elements.append(Spacer(1, 0.25 * inch))  
       
-    # Prepare table data  
-    table_data = [["RT (s)", "m/z", "Intensity"]]  
-    for _, row in mass_df.sort_values(by="Intensity", ascending=False).head(10).iterrows():  
-        table_data.append([  
-            f"{row['RT']:.2f}",  
-            f"{row['m/z']:.4f}",  
-            f"{row['Intensity']:.0f}"  
-        ])  
+    # Add mass spectra data  
+    elements.append(Paragraph("Mass Spectra Data (Sample)", heading_style))  
+      
+    # Convert dataframe to table  
+    data = [["RT", "m/z", "Intensity"]]  
+    for i, row in mass_df.head(10).iterrows():  
+        data.append([f"{row['RT']:.2f}", f"{row['m/z']:.4f}", f"{row['Intensity']:.0f}"])  
       
     # Create table  
-    table = Table(table_data, colWidths=[1.5*inch, 2*inch, 2*inch])  
-    table.setStyle(table_style)  
-    content.append(table)  
+    table = Table(data, colWidths=[1.5*inch, 2*inch, 2*inch])  
+    table.setStyle(TableStyle([  
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#F3F4F6")),  
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor("#171717")),  
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),  
+        ('FONTSIZE', (0, 0), (-1, 0), 12),  
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),  
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),  
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor("#E5E7EB")),  
+    ]))  
       
-    # Build the PDF  
-    doc.build(content)  
+    elements.append(table)  
+      
+    # Build PDF  
+    doc.build(elements)  
     buffer.seek(0)  
     return buffer  
   
 def get_download_link(pdf_buffer, base_filename):  
+    pdf_buffer.seek(0)  
     b64_pdf = base64.b64encode(pdf_buffer.read()).decode('utf-8')  
     href = f'<a class="download-button" href="data:application/pdf;base64,{b64_pdf}" download="{base_filename}_report.pdf">Download PDF Report</a>'  
     return href  
@@ -269,39 +272,36 @@ with tabs[0]:
             )  
             st.plotly_chart(tic_fig)  
               
-            # Display mass spectra data  
-            st.subheader("Mass Spectra Data")  
             st.dataframe(mass_df.head(10))  
               
             # Multiple target masses input  
             st.subheader("Extract Ion Chromatograms")  
-            st.markdown("Enter target masses separated by commas (e.g., 500.0, 600.0, 700.0)")  
-            target_masses_input = st.text_input("Target Masses", "500.0")  
-            tolerance = st.number_input("Mass Tolerance (±)", value=0.5, min_value=0.01, max_value=10.0, step=0.1)  
+            target_masses_input = st.text_input("Target Masses (comma-separated)", "500.0, 600.0")  
+            tolerance = st.number_input("Mass Tolerance (±)", value=0.5)  
               
             # Parse target masses  
             try:  
                 target_masses = [float(mass.strip()) for mass in target_masses_input.split(",")]  
                   
-                # Plot EIC for each target mass  
+                # Extract EICs for each target mass  
                 eic_fig = go.Figure()  
                   
                 # Color palette for multiple traces  
-                colors = ["#24EB84", "#B2EB24", "#EB3424", "#D324EB", "#24D0EB"]  
+                colors = ["#2563EB", "#24EB84", "#B2EB24", "#EB3424", "#D324EB"]  
                   
-                for i, target_mass in enumerate(target_masses):  
-                    eic_times, eic_intensities = extract_eic(exp, target_mass, tolerance)  
+                for i, mass in enumerate(target_masses):  
+                    eic_times, eic_intensities = extract_eic(exp, mass, tolerance)  
                     color_idx = i % len(colors)  
                     eic_fig.add_trace(go.Scatter(  
                         x=eic_times,   
                         y=eic_intensities,   
                         mode='lines',   
-                        name=f"m/z {target_mass:.4f}",  
+                        name=f"m/z {mass}",  
                         line=dict(color=colors[color_idx])  
                     ))  
                   
                 eic_fig.update_layout(  
-                    title="Extracted Ion Chromatogram (EIC)",  
+                    title=f"Extracted Ion Chromatogram(s)",  
                     xaxis_title="Retention Time (s)",  
                     yaxis_title="Intensity",  
                     plot_bgcolor="#FFFFFF",  
@@ -315,12 +315,11 @@ with tabs[0]:
                     )  
                 )  
                 st.plotly_chart(eic_fig)  
-            except Exception as e:  
-                st.error(f"Error extracting ion chromatograms: {str(e)}")  
-                st.info("Please enter valid mass values separated by commas.")  
+              
+            except ValueError as e:  
+                st.error(f"Error parsing masses: {str(e)}")  
                 eic_fig = go.Figure()  # Empty figure for PDF generation  
               
-            # PDF Report Generation  
             st.markdown("### PDF Report")  
             if st.button("Generate PDF Report"):  
                 with st.spinner("Generating PDF report..."):  
@@ -328,47 +327,42 @@ with tabs[0]:
                     if logo_file is not None:  
                         logo_path = "temp_logo.png"  
                       
-                    try:  
-                        target_masses = [float(mass.strip()) for mass in target_masses_input.split(",")]  
-                        pdf_buffer = create_pdf_report(  
-                            filename=uploaded_file.name,  
-                            tic_fig=tic_fig,  
-                            eic_fig=eic_fig,  
-                            mass_df=mass_df,  
-                            target_masses=target_masses,  
-                            tolerance=tolerance,  
-                            pdf_title=pdf_title_input,  
-                            logo_path=logo_path  
-                        )  
-                          
-                        download_link = get_download_link(pdf_buffer, uploaded_file.name.split('.')[0])  
-                          
-                        st.markdown('''  
-                        <style>  
-                        .download-button {  
-                            display: inline-block;  
-                            padding: 0.75em 1.5em;  
-                            color: white;  
-                            background-color: #2563EB;  
-                            border-radius: 6px;  
-                            text-decoration: none;  
-                            font-weight: bold;  
-                            margin-top: 15px;  
-                            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);  
-                            transition: all 0.3s ease;  
-                        }  
-                        .download-button:hover {  
-                            background-color: #1D4ED8;  
-                            box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);  
-                            transform: translateY(-2px);  
-                        }  
-                        </style>  
-                        ''', unsafe_allow_html=True)  
-                          
-                        st.markdown(download_link, unsafe_allow_html=True)  
-                        st.success("PDF report generated successfully! Click the button above to download.")  
-                    except Exception as e:  
-                        st.error(f"Error generating PDF report: {str(e)}")  
+                    pdf_buffer = create_pdf_report(  
+                        filename=uploaded_file.name,  
+                        tic_fig=tic_fig,  
+                        eic_fig=eic_fig,  
+                        mass_df=mass_df,  
+                        target_masses=target_masses,  
+                        tolerance=tolerance,  
+                        pdf_title=pdf_title_input,  
+                        logo_path=logo_path  
+                    )  
+                    download_link = get_download_link(pdf_buffer, uploaded_file.name.split('.')[0])  
+                      
+                    st.markdown('''  
+                    <style>  
+                    .download-button {  
+                        display: inline-block;  
+                        padding: 0.75em 1.5em;  
+                        color: white;  
+                        background-color: #2563EB;  
+                        border-radius: 6px;  
+                        text-decoration: none;  
+                        font-weight: bold;  
+                        margin-top: 15px;  
+                        box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);  
+                        transition: all 0.3s ease;  
+                    }  
+                    .download-button:hover {  
+                        background-color: #1D4ED8;  
+                        box-shadow: 0 6px 8px rgba(37, 99, 235, 0.3);  
+                        transform: translateY(-2px);  
+                    }  
+                    </style>  
+                    ''', unsafe_allow_html=True)  
+                      
+                    st.markdown(download_link, unsafe_allow_html=True)  
+                    st.success("PDF report generated successfully! Click the button above to download.")  
         except Exception as e:  
             st.error(f"Error processing mzML file: {str(e)}")  
     else:  
@@ -379,7 +373,8 @@ with tabs[0]:
 # -----------------------------------------------  
 with tabs[1]:  
     st.header("MS2 Spectral Matching")  
-    st.markdown("Upload your MS2 library as a CSV file for spectral matching. The CSV file should have the following columns:")  
+    st.markdown("Upload your MS2 library as a CSV file for spectral matching.")  
+    st.markdown("The CSV file should have the following columns:")  
     st.markdown("- **Spectrum Name**: Identifier for the spectrum")  
     st.markdown("- **m/z values**: Comma-separated m/z values (not used in this example)")  
     st.markdown("- **intensity values**: Comma-separated intensity values")  
