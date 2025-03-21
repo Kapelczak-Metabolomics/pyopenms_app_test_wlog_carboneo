@@ -46,12 +46,14 @@ def load_mzml_file(file_path):
     return exp  
   
 def extract_chromatogram(exp):  
-    # Extract TIC from experiment  
+    # Extract TIC from experiment by summing intensities  
     times = []  
     intensities = []  
     for spec in exp:  
         times.append(spec.getRT())  
-        intensities.append(spec.getTIC())  
+        # Calculate TIC by summing all peak intensities  
+        total_intensity = sum(spec.get_peaks()[1])  
+        intensities.append(total_intensity)  
     return times, intensities  
   
 def extract_mass_spectra(exp):  
@@ -65,26 +67,26 @@ def extract_mass_spectra(exp):
             masses.append(mz)  
             intensities.append(intensity)  
             rts.append(rt)  
-    mass_df = pd.DataFrame({  
-        'RT': rts,  
-        'm/z': masses,  
-        'Intensity': intensities  
-    })  
-    return mass_df  
+    return pd.DataFrame({"m/z": masses, "intensity": intensities, "retention_time": rts})  
   
 def extract_eic(exp, target_mass, tolerance):  
-    # Extract EIC for a specific mass  
+    # Extract Extracted Ion Chromatogram for a specific mass  
     times = []  
     intensities = []  
     for spec in exp:  
         rt = spec.getRT()  
-        mzs, ints = spec.get_peaks()  
-        intensity = 0  
-        for mz, inten in zip(mzs, ints):  
+        mzs = spec.get_peaks()[0]  
+        ints = spec.get_peaks()[1]  
+          
+        # Find peaks within the mass tolerance  
+        intensity_sum = 0  
+        for mz, intensity in zip(mzs, ints):  
             if abs(mz - target_mass) <= tolerance:  
-                intensity += inten  
+                intensity_sum += intensity  
+          
         times.append(rt)  
-        intensities.append(intensity)  
+        intensities.append(intensity_sum)  
+      
     return times, intensities  
   
 def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_mass, tolerance, pdf_title):  
@@ -106,68 +108,79 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_mass, toleranc
         parent=styles['Heading2'],  
         fontSize=18,  
         alignment=TA_LEFT,  
-        spaceAfter=10  
+        spaceAfter=12  
     )  
       
     normal_style = ParagraphStyle(  
         'Normal',  
         parent=styles['Normal'],  
         fontSize=12,  
-        spaceAfter=6  
+        spaceAfter=10  
     )  
       
     # Create content elements  
     elements = []  
       
-    # Add title  
-    elements.append(Paragraph(pdf_title, title_style))  
-    elements.append(Spacer(1, 0.25*inch))  
-      
-    # Add file information  
-    elements.append(Paragraph("File Information", subtitle_style))  
-    elements.append(Paragraph(f"Filename: {filename}", normal_style))  
-    elements.append(Paragraph(f"Date Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", normal_style))  
-    elements.append(Spacer(1, 0.25*inch))  
-      
     # Add logo if available  
     if os.path.exists("temp_logo.png"):  
         img = RLImage("temp_logo.png", width=2*inch, height=1*inch)  
         elements.append(img)  
-        elements.append(Spacer(1, 0.25*inch))  
+        elements.append(Spacer(1, 0.5*inch))  
       
-    # Add TIC plot  
+    # Add title  
+    elements.append(Paragraph(pdf_title, title_style))  
+      
+    # Add report info  
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
+    elements.append(Paragraph(f"Report generated on: {current_time}", normal_style))  
+    elements.append(Paragraph(f"File analyzed: {filename}", normal_style))  
+    elements.append(Spacer(1, 0.25*inch))  
+      
+    # Add TIC section  
     elements.append(Paragraph("Total Ion Chromatogram (TIC)", subtitle_style))  
+      
+    # Save TIC figure to a temporary file  
     if kaleido_available:  
-        tic_img_path = "tic_plot.png"  
+        tic_img_path = "temp_tic.png"  
         tic_fig.write_image(tic_img_path)  
-        elements.append(RLImage(tic_img_path, width=6*inch, height=4*inch))  
+        tic_img = RLImage(tic_img_path, width=6*inch, height=3*inch)  
+        elements.append(tic_img)  
     else:  
-        elements.append(Paragraph("Kaleido package not available for image export.", normal_style))  
+        elements.append(Paragraph("TIC image export requires kaleido package", normal_style))  
+      
     elements.append(Spacer(1, 0.25*inch))  
       
-    # Add EIC plot  
+    # Add EIC section  
     elements.append(Paragraph(f"Extracted Ion Chromatogram (EIC) for m/z {target_mass} ± {tolerance}", subtitle_style))  
+      
+    # Save EIC figure to a temporary file  
     if kaleido_available:  
-        eic_img_path = "eic_plot.png"  
+        eic_img_path = "temp_eic.png"  
         eic_fig.write_image(eic_img_path)  
-        elements.append(RLImage(eic_img_path, width=6*inch, height=4*inch))  
+        eic_img = RLImage(eic_img_path, width=6*inch, height=3*inch)  
+        elements.append(eic_img)  
     else:  
-        elements.append(Paragraph("Kaleido package not available for image export.", normal_style))  
+        elements.append(Paragraph("EIC image export requires kaleido package", normal_style))  
+      
     elements.append(Spacer(1, 0.25*inch))  
       
-    # Add mass spectra data table  
-    elements.append(Paragraph("Mass Spectra Data (Top 10 Intensities)", subtitle_style))  
+    # Add mass spectra data section  
+    elements.append(Paragraph("Mass Spectra Data (Top 10 Peaks)", subtitle_style))  
       
     # Sort by intensity and get top 10  
-    top_mass_df = mass_df.sort_values('Intensity', ascending=False).head(10)  
+    top_peaks = mass_df.sort_values(by="intensity", ascending=False).head(10)  
       
     # Create table data  
-    table_data = [['RT (s)', 'm/z', 'Intensity']]  
-    for _, row in top_mass_df.iterrows():  
-        table_data.append([f"{row['RT']:.2f}", f"{row['m/z']:.4f}", f"{row['Intensity']:.0f}"])  
+    table_data = [["m/z", "Intensity", "Retention Time (s)"]]  
+    for _, row in top_peaks.iterrows():  
+        table_data.append([  
+            f"{row['m/z']:.4f}",  
+            f"{row['intensity']:.0f}",  
+            f"{row['retention_time']:.2f}"  
+        ])  
       
     # Create table  
-    table = Table(table_data, colWidths=[1.5*inch, 1.5*inch, 1.5*inch])  
+    table = Table(table_data, colWidths=[2*inch, 2*inch, 2*inch])  
     table.setStyle(TableStyle([  
         ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),  
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),  
@@ -177,10 +190,19 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_mass, toleranc
         ('BACKGROUND', (0, 1), (-1, -1), colors.beige),  
         ('GRID', (0, 0), (-1, -1), 1, colors.black)  
     ]))  
+      
     elements.append(table)  
       
     # Build PDF  
     doc.build(elements)  
+      
+    # Clean up temporary files  
+    if kaleido_available:  
+        if os.path.exists("temp_tic.png"):  
+            os.remove("temp_tic.png")  
+        if os.path.exists("temp_eic.png"):  
+            os.remove("temp_eic.png")  
+      
     buffer.seek(0)  
     return buffer  
   
@@ -189,30 +211,24 @@ def get_download_link(buffer, filename):
     href = f'<a href="data:application/pdf;base64,{b64}" class="download-button" download="{filename}_report.pdf">Download PDF Report</a>'  
     return href  
   
-# Basic cosine similarity function for spectral matching  
+# -----------------------------------------------  
+# MS2 Spectral Matching Functions  
+# -----------------------------------------------  
+  
 def cosine_similarity(a, b):  
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)  
   
 def ms2_matching(query_intensities, library_spectra):  
     results = []  
     for spec_name, spec_intensities in library_spectra.items():  
-        # Ensure both arrays are the same length for comparison  
-        min_len = min(len(query_intensities), len(spec_intensities))  
-        query_intensities_trimmed = query_intensities[:min_len]  
-        spec_intensities_trimmed = spec_intensities[:min_len]  
-          
-        # If lengths are different, pad with zeros  
-        if len(query_intensities_trimmed) < len(spec_intensities_trimmed):  
-            query_intensities_trimmed = np.pad(query_intensities_trimmed,   
-                                              (0, len(spec_intensities_trimmed) - len(query_intensities_trimmed)))  
-        elif len(spec_intensities_trimmed) < len(query_intensities_trimmed):  
-            spec_intensities_trimmed = np.pad(spec_intensities_trimmed,  
-                                             (0, len(query_intensities_trimmed) - len(spec_intensities_trimmed)))  
-          
-        sim = cosine_similarity(np.array(query_intensities_trimmed), np.array(spec_intensities_trimmed))  
+        sim = cosine_similarity(np.array(query_intensities), np.array(spec_intensities))  
         results.append((spec_name, sim))  
     results.sort(key=lambda x: x[1], reverse=True)  
     return results  
+  
+# -----------------------------------------------  
+# Main Application  
+# -----------------------------------------------  
   
 # Sidebar for logo upload and PDF title entry    
 with st.sidebar:    
@@ -231,23 +247,22 @@ with tabs[0]:
     st.markdown("Upload an mzML file to view its corresponding chromatogram, mass spectra data, and generate a modern PDF report.")  
       
     # File uploader for mzML files  
-    uploaded_file = st.file_uploader("Upload mzML File", type=["mzML"])  
+    uploaded_file = st.file_uploader("Upload mzML File", type=["mzml"])  
       
     if uploaded_file is not None:  
-        # Save the uploaded file to a temporary location  
-        with open("temp.mzML", "wb") as f:  
-            f.write(uploaded_file.getbuffer())  
-          
         try:  
+            # Save the uploaded file to a temporary location  
+            with open("temp_file.mzml", "wb") as f:  
+                f.write(uploaded_file.getbuffer())  
+              
             # Load the mzML file  
-            exp = load_mzml_file("temp.mzML")  
-            st.success(f"File '{uploaded_file.name}' loaded successfully!")  
+            exp = load_mzml_file("temp_file.mzml")  
+            st.success(f"Successfully loaded {uploaded_file.name}")  
               
             # Extract and display TIC  
             st.markdown("### Total Ion Chromatogram (TIC)")  
             times, intensities = extract_chromatogram(exp)  
               
-            # Create TIC plot  
             tic_fig = go.Figure()  
             tic_fig.add_trace(go.Scatter(  
                 x=times,  
@@ -256,6 +271,7 @@ with tabs[0]:
                 line=dict(color='#2563EB', width=2),  
                 name='TIC'  
             ))  
+              
             tic_fig.update_layout(  
                 title="Total Ion Chromatogram",  
                 xaxis_title="Retention Time (s)",  
@@ -263,6 +279,7 @@ with tabs[0]:
                 plot_bgcolor="#FFFFFF",  
                 paper_bgcolor="#FFFFFF"  
             )  
+              
             st.plotly_chart(tic_fig)  
               
             # Extract and display mass spectra data  
@@ -270,23 +287,22 @@ with tabs[0]:
             mass_df = extract_mass_spectra(exp)  
             st.dataframe(mass_df.head(10))  
               
-            # EIC extraction  
-            st.markdown("### Extracted Ion Chromatogram (EIC)")  
-            target_mass = st.number_input("Target m/z", value=500.0)  
-            tolerance = st.number_input("Tolerance (±)", value=0.5)  
-              
             # Extract and display EIC  
+            st.markdown("### Extracted Ion Chromatogram (EIC)")  
+            target_mass = st.number_input("Target Mass (m/z)", value=500.0)  
+            tolerance = st.number_input("Mass Tolerance (±)", value=0.5)  
+              
             eic_times, eic_intensities = extract_eic(exp, target_mass, tolerance)  
               
-            # Create EIC plot  
             eic_fig = go.Figure()  
             eic_fig.add_trace(go.Scatter(  
                 x=eic_times,  
                 y=eic_intensities,  
                 mode='lines',  
                 line=dict(color='#24EB84', width=2),  
-                name=f'EIC m/z {target_mass} ± {tolerance}'  
+                name='EIC'  
             ))  
+              
             eic_fig.update_layout(  
                 title=f"Extracted Ion Chromatogram for m/z {target_mass} ± {tolerance}",  
                 xaxis_title="Retention Time (s)",  
@@ -294,6 +310,7 @@ with tabs[0]:
                 plot_bgcolor="#FFFFFF",  
                 paper_bgcolor="#FFFFFF"  
             )  
+              
             st.plotly_chart(eic_fig)  
               
             # PDF Report Generation  
@@ -344,7 +361,7 @@ with tabs[0]:
     else:  
         st.info("Please upload an mzML file to begin.")  
   
-# MS2 Spectral Matching Tab (New functionality)  
+# MS2 Spectral Matching Tab  
 with tabs[1]:  
     st.header("MS2 Spectral Matching")  
     st.markdown("Upload your MS2 library as a CSV file for spectral matching. The CSV file should have the following columns:")  
