@@ -58,85 +58,69 @@ def load_mzml_file(file_path):
     return exp  
   
 def extract_chromatogram(exp):  
-    # Extract TIC from experiment by summing intensities  
+    # Extract TIC (Total Ion Chromatogram)  
     times = []  
     intensities = []  
     for spec in exp:  
-        times.append(spec.getRT())  
-        # Calculate TIC by summing all peak intensities  
-        peaks = spec.get_peaks()  
-        if len(peaks) > 0 and len(peaks[1]) > 0:  
-            intensity = sum(peaks[1])  
-        else:  
-            intensity = 0  
-        intensities.append(intensity)  
+        if spec.getMSLevel() == 1:  # MS1 level  
+            times.append(spec.getRT())  
+            intensities.append(sum(spec.get_peaks()[1]))  
     return times, intensities  
   
-def extract_eic(exp, target_mass, tolerance):  
-    # Extract EIC for a specific target mass with tolerance  
+def extract_eic(exp, target_mass, tolerance=0.5):  
+    # Extract EIC (Extracted Ion Chromatogram) for a specific m/z value  
     times = []  
     intensities = []  
     for spec in exp:  
-        if spec.getMSLevel() == 1:  # MS1 level only  
+        if spec.getMSLevel() == 1:  # MS1 level  
             rt = spec.getRT()  
-            peaks = spec.get_peaks()  
-            if len(peaks) > 0 and len(peaks[0]) > 0:  
-                mzs = peaks[0]  
-                intens = peaks[1]  
-                # Find peaks within tolerance of target mass  
-                matches = [intens[i] for i, mz in enumerate(mzs) if abs(mz - target_mass) <= tolerance]  
-                intensity = sum(matches) if matches else 0  
+            mzs, ints = spec.get_peaks()  
+            # Find intensities within the mass tolerance  
+            for i, mz in enumerate(mzs):  
+                if abs(mz - target_mass) <= tolerance:  
+                    times.append(rt)  
+                    intensities.append(ints[i])  
+                    break  
             else:  
-                intensity = 0  
-            times.append(rt)  
-            intensities.append(intensity)  
+                # No matching peak found, add zero intensity  
+                times.append(rt)  
+                intensities.append(0)  
     return times, intensities  
   
 def extract_mass_spectra(exp, max_spectra=100):  
-    # Extract mass spectra data for the first max_spectra spectra  
+    # Extract mass spectra data for the first max_spectra MS1 spectra  
     data = []  
-    for i, spec in enumerate(exp):  
-        if i >= max_spectra:  
-            break  
-        rt = spec.getRT()  
-        peaks = spec.get_peaks()  
-        if len(peaks) > 0 and len(peaks[0]) > 0:  
-            mzs = peaks[0]  
-            intens = peaks[1]  
-            for j in range(min(5, len(mzs))):  # Take up to 5 peaks per spectrum  
-                data.append({  
-                    "RT (s)": rt,  
-                    "m/z": mzs[j],  
-                    "Intensity": intens[j]  
-                })  
+    count = 0  
+    for spec in exp:  
+        if spec.getMSLevel() == 1 and count < max_spectra:  # MS1 level  
+            rt = spec.getRT()  
+            mzs, ints = spec.get_peaks()  
+            # Take top 5 peaks  
+            if len(mzs) > 0:  
+                sorted_indices = np.argsort(ints)[-5:]  
+                for idx in sorted_indices:  
+                    data.append({  
+                        "RT (s)": round(rt, 2),  
+                        "m/z": round(mzs[idx], 4),  
+                        "Intensity": int(ints[idx])  
+                    })  
+                count += 1  
     return pd.DataFrame(data)  
   
-# -----------------------------------------------  
-# Functions for PDF report generation  
-# -----------------------------------------------  
-  
-def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_masses, tolerance, pdf_title="mzML Report", logo_path=None):  
-    # Create a PDF report with TIC, EIC, and mass spectra data  
+def create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, title="mzML Report"):  
+    # Create a PDF report with the chromatogram and mass spectra data  
     pdf_buffer = io.BytesIO()  
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)  
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, title=title)  
       
-    # Define styles  
+    # Create styles  
     styles = getSampleStyleSheet()  
-    styles.add(ParagraphStyle(  
-        name='TitleStyle',  
-        parent=styles['Title'],  
-        fontName='Helvetica-Bold',  
-        fontSize=16,  
-        textColor=colors.HexColor("#171717"),  
-        spaceAfter=12  
-    ))  
     styles.add(ParagraphStyle(  
         name='HeaderStyle',  
         parent=styles['Heading2'],  
         fontName='Helvetica-Bold',  
         fontSize=14,  
-        textColor=colors.HexColor("#171717"),  
-        spaceAfter=6  
+        textColor=colors.HexColor("#2563EB"),  
+        spaceAfter=12  
     ))  
     styles.add(ParagraphStyle(  
         name='NormalStyle',  
@@ -147,25 +131,34 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_masses, tolera
         spaceAfter=6  
     ))  
       
-    # Create content  
+    # Create flowables (content elements)  
     flowables = []  
       
-    # Add logo if provided  
-    if logo_path:  
-        img = Image.open(logo_path)  
-        width, height = img.size  
-        aspect_ratio = height / width  
-        img_width = 2 * inch  # Set width to 2 inches  
-        img_height = img_width * aspect_ratio  # Calculate height to maintain aspect ratio  
-        logo = RLImage(logo_path, width=img_width, height=img_height)  
-        flowables.append(logo)  
-        flowables.append(Spacer(1, 12))  
+    # Add title and date  
+    title_style = ParagraphStyle(  
+        name='TitleStyle',  
+        parent=styles['Heading1'],  
+        fontName='Helvetica-Bold',  
+        fontSize=18,  
+        textColor=colors.HexColor("#171717"),  
+        alignment=TA_CENTER,  
+        spaceAfter=20  
+    )  
+    flowables.append(Paragraph(title, title_style))  
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
+    flowables.append(Paragraph(f"Generated on: {date_str}", styles["NormalStyle"]))  
+    flowables.append(Spacer(1, 20))  
       
-    # Add title and metadata  
-    flowables.append(Paragraph(pdf_title, styles['TitleStyle']))  
-    flowables.append(Paragraph(f"File: {filename}", styles['NormalStyle']))  
-    flowables.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['NormalStyle']))  
-    flowables.append(Spacer(1, 12))  
+    # Add logo if available  
+    if os.path.exists("temp_logo.png"):  
+        img = Image.open("temp_logo.png")  
+        width, height = img.size  
+        aspect_ratio = width / height  
+        img_width = 2 * inch  
+        img_height = img_width / aspect_ratio  
+        rl_img = RLImage("temp_logo.png", width=img_width, height=img_height)  
+        flowables.append(rl_img)  
+        flowables.append(Spacer(1, 12))  
       
     # Add TIC plot  
     tic_img_bytes = tic_fig.to_image(format="png")  
@@ -176,22 +169,24 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_masses, tolera
     flowables.append(rl_tic)  
     flowables.append(Spacer(1, 12))  
       
-    # Add EIC plot  
+    # Add overlaid EIC plots for each target mass  
     eic_img_bytes = eic_fig.to_image(format="png")  
     with open("eic_temp.png", "wb") as f:  
         f.write(eic_img_bytes)  
     rl_eic = RLImage("eic_temp.png", width=6*inch, height=3*inch)  
-    masses_str = ", ".join([f"{m:.3f}" for m in target_masses])  
-    flowables.append(Paragraph(f"Extracted Ion Chromatogram (EIC) for target masses: {masses_str} (±{tolerance})", styles["HeaderStyle"]))  
+    masses_str = ", ".join(["{:.3f}".format(m) for m in target_masses])  
+    flowables.append(Paragraph("Extracted Ion Chromatogram (EIC) for target masses: " + masses_str + " (±" + str(tolerance) + ")", styles["HeaderStyle"]))  
     flowables.append(rl_eic)  
     flowables.append(Spacer(1, 12))  
       
-    # Add mass spectra table  
+    # Add a table of mass spectra (first 10 rows for brevity)  
     flowables.append(Paragraph("Mass Spectra (sample)", styles["HeaderStyle"]))  
     sample_df = mass_df.head(10)  
     data = [sample_df.columns.to_list()] + sample_df.values.tolist()  
     table = Table(data)  
-    table.setStyle(TableStyle([  
+      
+    # Fixed: Use individual color objects for each style element  
+    tbl_style = TableStyle([  
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2563EB")),  
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),  
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  
@@ -199,7 +194,8 @@ def create_pdf_report(filename, tic_fig, eic_fig, mass_df, target_masses, tolera
         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),  
         ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),  
         ('GRID', (0, 0), (-1, -1), 1, colors.grey)  
-    ]))  
+    ])  
+    table.setStyle(tbl_style)  
     flowables.append(table)  
       
     doc.build(flowables)  
@@ -212,6 +208,51 @@ def get_download_link(pdf_buffer, base_filename):
     return download_link  
   
 # -----------------------------------------------  
+# MS2 Spectral Matching Tab  
+# -----------------------------------------------  
+with tabs[1]:  
+    st.header("MS2 Spectral Matching")  
+    st.markdown("This tab demonstrates MS2 spectral matching (dummy implementation).")  
+    query_input = st.text_input("Enter spectral intensities (comma-separated)", "100,200,150")  
+    if query_input:  
+        try:  
+            query_intensities = [float(x.strip()) for x in query_input.split(",")]  
+            # Dummy spectral matching: sort by sum of intensities (just for demonstration)  
+            library_spectra = [  
+                ('Spectrum_A', np.random.uniform(0.8, 1.0)),  
+                ('Spectrum_B', np.random.uniform(0.5, 0.8)),  
+                ('Spectrum_C', np.random.uniform(0.2, 0.5))  
+            ]  
+            results = sorted(library_spectra, key=lambda x: x[1], reverse=True)  
+            st.markdown("### Matching Results")  
+            if results:  
+                results_df = pd.DataFrame(results, columns=["Spectrum Name", "Similarity Score"])  
+                results_df["Similarity Score"] = results_df["Similarity Score"].apply(lambda x: round(x, 3))  
+                st.dataframe(results_df)  
+                  
+                st.markdown("### Top Matches Visualization")  
+                top_results = results[:5] if len(results) >= 5 else results  
+                fig = go.Figure()  
+                for name, score in top_results:  
+                    fig.add_trace(go.Bar(  
+                        x=[name],  
+                        y=[score],  
+                        name=name  
+                    ))  
+                fig.update_layout(  
+                    title="Top Spectral Matches",  
+                    xaxis_title="Spectrum Name",  
+                    yaxis_title="Similarity Score",  
+                    plot_bgcolor="#FFFFFF",  
+                    paper_bgcolor="#FFFFFF"  
+                )  
+                st.plotly_chart(fig)  
+            else:  
+                st.write("No matching spectra found.")  
+        except Exception as e:  
+            st.error(f"Error processing your query: {str(e)}")  
+  
+# -----------------------------------------------  
 # mzML Viewer Tab  
 # -----------------------------------------------  
 with tabs[0]:  
@@ -221,12 +262,11 @@ with tabs[0]:
       
     if uploaded_file is not None:  
         try:  
-            # Save uploaded file temporarily  
+            # Save uploaded mzML file temporarily  
             temp_file_path = "temp_upload.mzML"  
             with open(temp_file_path, "wb") as f:  
                 f.write(uploaded_file.getbuffer())  
               
-            # Load mzML file and extract data  
             exp = load_mzml_file(temp_file_path)  
             times, intensities = extract_chromatogram(exp)  
             mass_df = extract_mass_spectra(exp)  
@@ -243,12 +283,9 @@ with tabs[0]:
             )  
             st.plotly_chart(tic_fig)  
               
-            # Display mass spectra data  
-            st.dataframe(mass_df.head(10))  
-              
-            # Input for target masses (multiple, comma-separated)  
-            target_mass_input = st.text_input("Enter target mass values (comma-separated)", "500.0, 600.0")  
-            tolerance = st.number_input("Mass Tolerance (±)", value=0.5, min_value=0.01, max_value=10.0)  
+            # Input for target masses - MOVED ABOVE the EIC display  
+            target_mass_input = st.text_input("Enter target mass values (comma-separated)", "400.0, 500.0")  
+            tolerance = st.number_input("Mass tolerance (±)", min_value=0.01, max_value=10.0, value=0.5, step=0.1)  
               
             # Parse target masses  
             try:  
@@ -256,138 +293,47 @@ with tabs[0]:
                   
                 # Plot EIC for each target mass  
                 eic_fig = go.Figure()  
-                colors = ["#2563EB", "#24EB84", "#B2EB24", "#EB3424", "#D324EB"]  # Color palette  
                   
-                for i, mass in enumerate(target_masses):  
-                    eic_times, eic_intensities = extract_eic(exp, mass, tolerance)  
+                # Color palette for multiple traces  
+                colors = ["#2563EB", "#24EB84", "#B2EB24", "#EB3424", "#D324EB"]  
+                  
+                for i, target_mass in enumerate(target_masses):  
+                    eic_times, eic_intensities = extract_eic(exp, target_mass, tolerance)  
                     color_idx = i % len(colors)  
                     eic_fig.add_trace(go.Scatter(  
                         x=eic_times,   
                         y=eic_intensities,   
                         mode='lines',   
-                        name=f"m/z {mass:.3f}",  
+                        name=f"m/z {target_mass:.3f}",  
                         line=dict(color=colors[color_idx])  
                     ))  
                   
                 eic_fig.update_layout(  
-                    title="Extracted Ion Chromatogram (EIC)",  
+                    title=f"Extracted Ion Chromatogram (EIC) for Target Masses (±{tolerance})",  
                     xaxis_title="Retention Time (s)",  
                     yaxis_title="Intensity",  
                     plot_bgcolor="#FFFFFF",  
-                    paper_bgcolor="#FFFFFF",  
-                    legend=dict(  
-                        orientation="h",  
-                        yanchor="bottom",  
-                        y=1.02,  
-                        xanchor="right",  
-                        x=1  
-                    )  
+                    paper_bgcolor="#FFFFFF"  
                 )  
+                  
+                # Display EIC plot BELOW the mass selection inputs  
                 st.plotly_chart(eic_fig)  
                   
-                # PDF Report Generation  
-                st.markdown("### PDF Report")  
-                if st.button("Generate PDF Report"):  
-                    with st.spinner("Generating PDF report..."):  
-                        logo_path = "temp_logo.png" if logo_file is not None else None  
-                          
-                        pdf_buffer = create_pdf_report(  
-                            filename=uploaded_file.name,  
-                            tic_fig=tic_fig,  
-                            eic_fig=eic_fig,  
-                            mass_df=mass_df,  
-                            target_masses=target_masses,  
-                            tolerance=tolerance,  
-                            pdf_title=pdf_title_input,  
-                            logo_path=logo_path  
-                        )  
-                          
-                        download_link = get_download_link(pdf_buffer, uploaded_file.name.split('.')[0])  
-                        st.markdown(download_link, unsafe_allow_html=True)  
-                          
-                        # Add some CSS to style the download button  
-                        st.markdown("""  
-                        <style>  
-                        .download-button {  
-                            display: inline-block;  
-                            padding: 0.5em 1em;  
-                            background-color: #2563EB;  
-                            color: white;  
-                            text-decoration: none;  
-                            border-radius: 4px;  
-                            font-weight: bold;  
-                            margin-top: 1em;  
-                        }  
-                        .download-button:hover {  
-                            background-color: #1E40AF;  
-                        }  
-                        </style>  
-                        """, unsafe_allow_html=True)  
+                # Display mass spectra data  
+                st.markdown("### Mass Spectra Data (Sample)")  
+                st.dataframe(mass_df.head())  
                   
+                # Generate PDF report  
+                if st.button("Generate PDF Report"):  
+                    try:  
+                        pdf_buffer = create_pdf_report(tic_fig, eic_fig, mass_df, target_masses, tolerance, pdf_title_input)  
+                        st.markdown(get_download_link(pdf_buffer, "mzml_analysis"), unsafe_allow_html=True)  
+                        st.success("PDF report generated successfully!")  
+                    except Exception as e:  
+                        st.error(f"Error generating PDF report: {str(e)}")  
+                          
             except ValueError as e:  
-                st.error(f"Error parsing mass values: {str(e)}")  
-                st.info("Please enter valid numeric values separated by commas.")  
+                st.error(f"Invalid mass input: {str(e)}")  
                   
         except Exception as e:  
             st.error(f"Error processing mzML file: {str(e)}")  
-            st.info("Please ensure the file is a valid mzML format.")  
-  
-# -----------------------------------------------  
-# MS2 Spectral Matching Tab  
-# -----------------------------------------------  
-with tabs[1]:  
-    st.header("MS2 Spectral Matching")  
-    st.markdown("This tab demonstrates MS2 spectral matching functionality.")  
-      
-    # Simple dummy implementation for demonstration  
-    query_input = st.text_input("Enter spectral intensities (comma-separated)", "100,200,150")  
-      
-    if query_input:  
-        try:  
-            query_intensities = [float(x.strip()) for x in query_input.split(",")]  
-              
-            # Dummy spectral matching (for demonstration)  
-            library_spectra = [  
-                ('Spectrum_A', np.random.uniform(0.8, 1.0)),  
-                ('Spectrum_B', np.random.uniform(0.5, 0.8)),  
-                ('Spectrum_C', np.random.uniform(0.2, 0.5)),  
-                ('Spectrum_D', np.random.uniform(0.1, 0.4)),  
-                ('Spectrum_E', np.random.uniform(0.3, 0.7))  
-            ]  
-              
-            # Sort by similarity score (descending)  
-            results = sorted(library_spectra, key=lambda x: x[1], reverse=True)  
-              
-            st.markdown("### Matching Results")  
-            if results:  
-                # Create a DataFrame for results  
-                results_df = pd.DataFrame(results, columns=["Spectrum Name", "Similarity Score"])  
-                results_df["Similarity Score"] = results_df["Similarity Score"].apply(lambda x: round(x, 3))  
-                  
-                # Display results as a table  
-                st.dataframe(results_df)  
-                  
-                # Plot top 5 matches  
-                st.markdown("### Top Matches Visualization")  
-                top_results = results[:5] if len(results) >= 5 else results  
-                  
-                fig = go.Figure()  
-                for name, score in top_results:  
-                    fig.add_trace(go.Bar(  
-                        x=[name],  
-                        y=[score],  
-                        name=name  
-                    ))  
-                  
-                fig.update_layout(  
-                    title="Top Spectral Matches",  
-                    xaxis_title="Spectrum Name",  
-                    yaxis_title="Similarity Score",  
-                    plot_bgcolor="#FFFFFF",  
-                    paper_bgcolor="#FFFFFF"  
-                )  
-                st.plotly_chart(fig)  
-            else:  
-                st.write("No matching spectra found.")  
-        except Exception as e:  
-            st.error(f"Error processing your query: {str(e)}")  
